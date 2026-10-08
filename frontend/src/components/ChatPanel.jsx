@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-// Minimal markdown → HTML: bold, inline code, code blocks
+// Minimal markdown: bold, inline code, code blocks
 function renderContent(text) {
   const blocks = [];
   const lines = text.split("\n");
@@ -27,10 +27,23 @@ function renderContent(text) {
   return blocks;
 }
 
+const INLINE_CODE_STYLE = {
+  fontFamily: "var(--mono)", fontSize: 11, background: "var(--bg)",
+  padding: "1px 5px", borderRadius: 3,
+};
+
+// Returns React nodes rather than an HTML string, so any markup in the
+// message text is rendered as plain text instead of being injected.
 function inlineFormat(text) {
-  return text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, `<code style="font-family:var(--mono);font-size:11px;background:var(--bg);padding:1px 5px;border-radius:3px;">$1</code>`);
+  return text.split(/(\*\*.+?\*\*|`[^`]+`)/g).map((part, i) => {
+    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
+      return <code key={i} style={INLINE_CODE_STYLE}>{part.slice(1, -1)}</code>;
+    }
+    return part;
+  });
 }
 
 function CodeBlock({ lang, content }) {
@@ -64,11 +77,9 @@ function Message({ msg }) {
             <CodeBlock key={idx} lang={block.lang} content={block.content} />
           ) : (
             block.content.trim() && (
-              <p
-                key={idx}
-                style={{ margin: "4px 0" }}
-                dangerouslySetInnerHTML={{ __html: inlineFormat(block.content) }}
-              />
+              <p key={idx} style={{ margin: "4px 0" }}>
+                {inlineFormat(block.content)}
+              </p>
             )
           )
         )}
