@@ -1,12 +1,17 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # must run before the clients below read their env vars
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
 
-from models import LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse
+from models import LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse, RepoListResponse
 from github_client import GitHubClient
 from repo_parser import RepoParser
-from claude_client import ClaudeClient
+from claude_client import ClaudeClient, MODEL
+import db
 
 app = FastAPI(title="Repo Assistant API")
 
@@ -24,6 +29,28 @@ sessions: dict[str, dict] = {}
 github = GitHubClient()
 parser = RepoParser()
 claude = ClaudeClient()
+
+db.init_db()
+
+
+@app.get("/repos", response_model=RepoListResponse)
+async def list_repos():
+    """Return the stored list of the user's repositories."""
+    return RepoListResponse(repos=db.list_repos(), synced_at=db.last_synced_at())
+
+
+@app.post("/repos/sync", response_model=RepoListResponse)
+async def sync_repos():
+    """Refresh the stored repo list from GitHub."""
+    try:
+        repos = await github.list_user_repos()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"GitHub API error: {e}")
+
+    synced_at = db.replace_repos(repos)
+    return RepoListResponse(repos=db.list_repos(), synced_at=synced_at)
 
 
 @app.post("/repo/load", response_model=LoadRepoResponse)
@@ -58,6 +85,7 @@ async def load_repo(req: LoadRepoRequest):
         file_count=len(files),
         tree=tree[:200],  # send first 200 tree entries to frontend
         meta=meta,
+        model=MODEL,
     )
 
 

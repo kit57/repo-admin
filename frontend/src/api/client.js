@@ -13,6 +13,22 @@ export async function loadRepo(url, sessionId) {
   return res.json();
 }
 
+async function jsonOrThrow(res, fallback) {
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || fallback);
+  }
+  return res.json();
+}
+
+export async function listRepos() {
+  return jsonOrThrow(await fetch(`${BASE}/repos`), "Failed to list repos");
+}
+
+export async function syncRepos() {
+  return jsonOrThrow(await fetch(`${BASE}/repos/sync`, { method: "POST" }), "Failed to sync repos");
+}
+
 export async function getTree(sessionId) {
   const res = await fetch(`${BASE}/repo/tree/${sessionId}`);
   if (!res.ok) throw new Error("Failed to fetch tree");

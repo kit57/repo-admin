@@ -1,11 +1,11 @@
-# RepoAI — GitHub Code Assistant
+# RepoAI — Repo Administrator
 
-An AI-powered assistant that indexes any GitHub repository and lets you generate features, refactor code, write tests, and more — all in context.
+An AI-powered administrator for your GitHub repositories: keep track of all your projects in one place, ask questions about their state, and get suggestions on how to improve them.
 
 ## Architecture
 
 ```
-repo-assistant/
+repo-admin/
 ├── backend/      Python + FastAPI  (port 8000)
 └── frontend/     React + Vite      (port 5173)
 ```
@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY and optionally GITHUB_TOKEN
+# Edit .env and add your ANTHROPIC_API_KEY and GITHUB_TOKEN
 
 # Run
 python main.py
@@ -53,8 +53,11 @@ npm run dev
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key |
-| `GITHUB_TOKEN` | Recommended | GitHub PAT — raises rate limit from 60 to 5,000 req/hr |
+| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key (`CLAUDE_API_KEY` is also accepted) |
+| `GITHUB_TOKEN` | ✅ | GitHub PAT — needed to list your repos; also raises the rate limit from 60 to 5,000 req/hr |
+| `CLAUDE_MODEL` | — | Defaults to `claude-sonnet-5-5` |
+| `CLAUDE_MAX_TOKENS` | — | Defaults to `8000` |
+| `DB_PATH` | — | SQLite file, defaults to `backend/repo_admin.db` |
 
 ### Frontend (`frontend/.env`)
 
@@ -64,11 +67,13 @@ npm run dev
 
 ## How It Works
 
-1. **Load** — Paste a GitHub URL and click Load. The backend fetches the repo's file tree and contents via the GitHub API, then chunks them into context-ready pieces.
+1. **Repos** — The Repos view lists every repository your `GITHUB_TOKEN` can see (owned, collaborator and org repos). Click **Sync from GitHub** to refresh it; the list is stored in SQLite so it survives restarts. Repos with no push in 90 days are flagged as stale.
 
-2. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the Claude prompt, regardless of relevance scoring.
+2. **Load** — Click **Open** on a repo, or paste any GitHub URL and click Load. The backend fetches the repo's file tree and contents via the GitHub API, then chunks them into context-ready pieces.
 
-3. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams Claude's response back token by token.
+3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the Claude prompt, regardless of relevance scoring.
+
+4. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams Claude's response back token by token.
 
 ## Key Design Decisions
 
@@ -86,18 +91,22 @@ Repo context and conversation history are stored in-memory per `session_id` (a U
 ```
 backend/
 ├── main.py            FastAPI app and routes
+├── db.py              SQLite storage for the repo list
 ├── models.py          Pydantic schemas
-├── github_client.py   GitHub API — fetch tree + file contents
+├── github_client.py   GitHub API — list repos, fetch tree + file contents
 ├── repo_parser.py     Chunk files, select relevant context
 ├── claude_client.py   Anthropic streaming client
 └── requirements.txt
 
 frontend/src/
+├── main.jsx                   Entry point
 ├── App.jsx                    Root layout + state wiring
 ├── index.css                  Global styles
 ├── api/client.js              fetch wrappers for all backend calls
+├── utils/time.js              Relative time helpers
 ├── hooks/useSession.js        Session state + load/chat actions
 └── components/
+    ├── RepoList.jsx            All repos table + sync
     ├── FileTree.jsx            Sidebar file explorer (recursive)
     ├── ChatPanel.jsx           Messages + streaming input
     └── InfoPanel.jsx           Repo stats + session info

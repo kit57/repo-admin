@@ -19,8 +19,10 @@ export function useSession() {
         role: "assistant",
         content: `Repo loaded. Indexed **${data.file_count} files** from \`${data.meta.full_name}\`. What would you like to build?`,
       }]);
+      return true;
     } catch (e) {
       setError(e.message);
+      return false;
     } finally {
       setLoading(false);
     }

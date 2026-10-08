@@ -2,7 +2,7 @@ import os
 import re
 import asyncio
 import aiohttp
-from models import TreeNode, RepoMeta
+from models import TreeNode, RepoMeta, RepoSummary
 
 GITHUB_API = "https://api.github.com"
 
@@ -60,6 +60,50 @@ class GitHubClient:
             languages=languages,
             last_push=data.get("pushed_at"),
         )
+
+    async def list_user_repos(self) -> list[RepoSummary]:
+        """List every repo the token's user owns or collaborates on (paginated)."""
+        if "Authorization" not in self.headers:
+            raise RuntimeError("GITHUB_TOKEN is not set — it is required to list your repositories")
+
+        repos = []
+        page = 1
+        async with aiohttp.ClientSession(headers=self.headers) as session:
+            while True:
+                params = {
+                    "per_page": 100,
+                    "page": page,
+                    "affiliation": "owner,collaborator,organization_member",
+                    "sort": "pushed",
+                }
+                async with session.get(f"{GITHUB_API}/user/repos", params=params) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                if not data:
+                    break
+                for r in data:
+                    repos.append(RepoSummary(
+                        id=r["id"],
+                        full_name=r["full_name"],
+                        owner=r["owner"]["login"],
+                        name=r["name"],
+                        description=r.get("description"),
+                        html_url=r["html_url"],
+                        private=r.get("private", False),
+                        fork=r.get("fork", False),
+                        archived=r.get("archived", False),
+                        language=r.get("language"),
+                        stars=r.get("stargazers_count", 0),
+                        forks=r.get("forks_count", 0),
+                        open_issues=r.get("open_issues_count", 0),
+                        default_branch=r.get("default_branch"),
+                        pushed_at=r.get("pushed_at"),
+                        updated_at=r.get("updated_at"),
+                    ))
+                if len(data) < 100:
+                    break
+                page += 1
+        return repos
 
     async def get_tree(self, owner: str, repo: str) -> list[TreeNode]:
         """Fetch the full recursive file tree."""

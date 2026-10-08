@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { timeSince } from "../utils/time";
 
 function StatRow({ label, value, color }) {
   return (
@@ -27,15 +28,6 @@ function LangBar({ name, bytes, total }) {
       </div>
     </div>
   );
-}
-
-function timeSince(dateStr) {
-  if (!dateStr) return "—";
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const h = Math.floor(diff / 3600000);
-  if (h < 1) return "< 1h ago";
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 export default function InfoPanel({ repo, messages, contextFiles }) {
@@ -74,7 +66,7 @@ export default function InfoPanel({ repo, messages, contextFiles }) {
             <StatRow label="Forks" value={meta?.forks?.toLocaleString()} />
             <StatRow label="Open issues" value={meta?.open_issues} />
             <StatRow label="Last push" value={timeSince(meta?.last_push)} />
-            <StatRow label="Model" value="sonnet-4" color="blue" />
+            <StatRow label="Model" value={repo.model?.replace(/^claude-/, "")} color="blue" />
 
             {topLangs.length > 0 && (
               <>

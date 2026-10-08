@@ -50,9 +50,35 @@ class LoadRepoResponse(BaseModel):
     file_count: int
     tree: list[TreeNode]
     meta: RepoMeta
+    model: str
 
 
 class TreeResponse(BaseModel):
     tree: list[TreeNode]
     repo: str
     owner: str
+
+
+class RepoSummary(BaseModel):
+    id: int
+    full_name: str
+    owner: str
+    name: str
+    description: Optional[str] = None
+    html_url: str
+    private: bool = False
+    fork: bool = False
+    archived: bool = False
+    language: Optional[str] = None
+    stars: int = 0
+    forks: int = 0
+    open_issues: int = 0
+    default_branch: Optional[str] = None
+    pushed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    synced_at: Optional[str] = None
+
+
+class RepoListResponse(BaseModel):
+    repos: list[RepoSummary]
+    synced_at: Optional[str] = None

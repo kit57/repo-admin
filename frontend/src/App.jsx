@@ -2,6 +2,7 @@ import { useState } from "react";
 import FileTree from "./components/FileTree";
 import ChatPanel from "./components/ChatPanel";
 import InfoPanel from "./components/InfoPanel";
+import RepoList from "./components/RepoList";
 import { useSession } from "./hooks/useSession";
 
 export default function App() {
@@ -13,10 +14,20 @@ export default function App() {
 
   const [repoUrl, setRepoUrl] = useState("");
   const [activeFile, setActiveFile] = useState(null);
+  const [view, setView] = useState("repos"); // "repos" | "chat"
+  const [openingUrl, setOpeningUrl] = useState(null);
+
+  const openRepo = async (url) => {
+    setOpeningUrl(url);
+    setRepoUrl(url);
+    setActiveFile(null);
+    if (await load(url)) setView("chat");
+    setOpeningUrl(null);
+  };
 
   const handleLoad = (e) => {
     e.preventDefault();
-    if (repoUrl.trim()) load(repoUrl.trim());
+    if (repoUrl.trim()) openRepo(repoUrl.trim());
   };
 
   const handleFileSelect = (path) => {
@@ -31,6 +42,10 @@ export default function App() {
       {/* Top bar */}
       <div className="topbar">
         <div className="logo">Repo<span>AI</span></div>
+        <nav className="view-tabs">
+          <button className={view === "repos" ? "active" : ""} onClick={() => setView("repos")}>Repos</button>
+          <button className={view === "chat" ? "active" : ""} onClick={() => setView("chat")}>Chat</button>
+        </nav>
         <form onSubmit={handleLoad} style={{ display: "flex", gap: 8, flex: 1, maxWidth: 560 }}>
           <div className="repo-input-wrap" style={{ flex: 1 }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -64,25 +79,29 @@ export default function App() {
       </div>
 
       {/* Main layout */}
-      <div className="main">
-        <FileTree
-          tree={repo?.tree || []}
-          onSelect={handleFileSelect}
-          activeFile={activeFile}
-        />
-        <ChatPanel
-          messages={messages}
-          onSend={chat}
-          contextFiles={contextFiles}
-          onRemoveContext={removeContextFile}
-          disabled={!repo || isStreaming}
-        />
-        <InfoPanel
-          repo={repo}
-          messages={messages}
-          contextFiles={contextFiles}
-        />
-      </div>
+      {view === "repos" ? (
+        <RepoList onOpen={openRepo} openingUrl={openingUrl} />
+      ) : (
+        <div className="main">
+          <FileTree
+            tree={repo?.tree || []}
+            onSelect={handleFileSelect}
+            activeFile={activeFile}
+          />
+          <ChatPanel
+            messages={messages}
+            onSend={chat}
+            contextFiles={contextFiles}
+            onRemoveContext={removeContextFile}
+            disabled={!repo || isStreaming}
+          />
+          <InfoPanel
+            repo={repo}
+            messages={messages}
+            contextFiles={contextFiles}
+          />
+        </div>
+      )}
     </>
   );
 }

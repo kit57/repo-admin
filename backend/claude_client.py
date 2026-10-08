@@ -1,20 +1,20 @@
 import os
 import anthropic
-from backend.prompts.claude_prompts import CLAUDE_GENERAL_PROMPT
+from prompts.claude_prompts import CLAUDE_GENERAL_PROMPT
 from repo_parser import FileChunk
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.getenv("CLAUDE_MODEL")
-MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS"))
+MODEL = os.getenv("CLAUDE_MODEL") or "claude-sonnet-5-5"
+MAX_TOKENS = int(os.getenv("CLAUDE_MAX_TOKENS") or 8000)
 
 SYSTEM_PROMPT = CLAUDE_GENERAL_PROMPT
 
 
 class ClaudeClient:
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY"))
 
     def _build_context_block(self, chunks: list[FileChunk]) -> str:
         if not chunks:
