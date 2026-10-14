@@ -12,6 +12,25 @@ repo-admin/
 
 ## Quick Start
 
+### Docker
+
+Docker Compose runs the API and the production-built frontend together. Configure the
+backend environment file before starting the stack:
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env and add your ANTHROPIC_API_KEY and GITHUB_TOKEN
+
+docker compose up --build
+```
+
+- App: http://localhost:8080
+- API and Swagger docs: http://localhost:8000/docs
+
+The API database is stored in a named Docker volume and survives container restarts.
+Stop the services with `docker compose down`; use `docker compose down -v` only when
+you also want to delete the stored database.
+
 ### 1. Backend
 
 ```bash
