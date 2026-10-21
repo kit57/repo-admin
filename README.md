@@ -19,10 +19,15 @@ backend environment file before starting the stack:
 
 ```bash
 cp backend/.env.example backend/.env
-# Edit backend/.env and add your ANTHROPIC_API_KEY and GITHUB_TOKEN
+# Edit backend/.env and add your GITHUB_TOKEN
 
 docker compose up --build
 ```
+
+By default the stack also starts an `ollama` service and downloads the default open-weight model
+(`gemma3:4b`, ~3.4 GB) on first run, so no LLM API key is needed. The container runs on CPU unless
+you give it GPU access. If you use Claude or OpenAI instead, set `LLM_PROVIDER` in `backend/.env`
+and start only what you need with `docker compose up --build backend frontend`.
 
 - App: http://localhost:8080
 - API and Swagger docs: http://localhost:8000/docs
@@ -45,7 +50,10 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY and GITHUB_TOKEN
+# Edit .env and add your GITHUB_TOKEN
+
+# Default LLM: a local open-weight model via Ollama (https://ollama.com)
+ollama pull gemma3:4b
 
 # Run
 python main.py
@@ -72,10 +80,20 @@ npm run dev
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | ✅ | Your Anthropic API key (`CLAUDE_API_KEY` is also accepted) |
 | `GITHUB_TOKEN` | ✅ | GitHub PAT — needed to list your repos; also raises the rate limit from 60 to 5,000 req/hr |
+| `LLM_PROVIDER` | — | `ollama` (default), `anthropic` or `openai`. Aliases: `gemma` → `ollama`, `claude` → `anthropic` |
+| `LLM_FALLBACK_PROVIDERS` | — | Comma-separated providers to try if the main one fails before responding |
+| `LLM_MAX_TOKENS` | — | Max response tokens for every provider, defaults to `8000` |
+| `OLLAMA_BASE_URL` | — | Defaults to `http://localhost:11434` |
+| `OLLAMA_MODEL` | — | Defaults to `gemma3:4b` |
+| `OLLAMA_NUM_CTX` | — | Context window, defaults to `32768`. Repo context is sized to fit it |
+| `OLLAMA_NUM_GPU` | — | GPU layers; `0` forces CPU (no GPU, or CUDA driver errors) |
+| `ANTHROPIC_API_KEY` | `anthropic` | Your Anthropic API key (`CLAUDE_API_KEY` is also accepted) |
 | `CLAUDE_MODEL` | — | Defaults to `claude-sonnet-5-5` |
-| `CLAUDE_MAX_TOKENS` | — | Defaults to `8000` |
+| `CLAUDE_MAX_TOKENS` | — | Defaults to `LLM_MAX_TOKENS` |
+| `OPENAI_API_KEY` | `openai` | OpenAI key (optional for keyless local servers) |
+| `OPENAI_MODEL` | `openai` | Model name — no default |
+| `OPENAI_BASE_URL` | — | Defaults to `https://api.openai.com/v1`; set it for any OpenAI-compatible API (OpenRouter, Groq, vLLM, LM Studio...) |
 | `DB_PATH` | — | SQLite file, defaults to `backend/repo_admin.db` |
 
 ### Frontend (`frontend/.env`)
@@ -90,9 +108,36 @@ npm run dev
 
 2. **Load** — Click **Open** on a repo, or paste any GitHub URL and click Load. The backend fetches the repo's file tree and contents via the GitHub API, then chunks them into context-ready pieces.
 
-3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the Claude prompt, regardless of relevance scoring.
+3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the LLM prompt, regardless of relevance scoring.
 
-4. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams Claude's response back token by token.
+4. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams the selected provider's response back token by token.
+
+## LLM Providers
+
+The default provider is a local open-weight model (Gemma via Ollama), so a fresh setup
+costs nothing per token and needs no API key.
+
+> **Upgrading from a Claude-only version?** Add `LLM_PROVIDER=anthropic` to `backend/.env`
+> to keep using Claude.
+
+- **Switching providers** — set `LLM_PROVIDER` (and that provider's model/key vars) and restart.
+  `GET /llm/providers` shows the default, the fallbacks and which providers are configured.
+- **Per-request override** — `POST /chat` accepts optional `provider` and `model` fields, e.g.
+  `{"session_id": "...", "prompt": "...", "provider": "anthropic", "model": "claude-opus-5-5"}`.
+- **Fallback** — with `LLM_FALLBACK_PROVIDERS=anthropic`, a request whose provider fails
+  *before sending its first token* (unreachable, model missing, bad key) is retried on the next
+  provider. Errors after streaming has started are shown inline at the end of the reply.
+
+### Adding a provider
+
+1. Create `backend/llm/<name>_provider.py` with a subclass of `LLMProvider` (`backend/llm/base.py`):
+   - set `name` and `default_model`
+   - implement `async def stream(self, system, messages)` — `messages` is a list of
+     `{"role": "user" | "assistant", "content": str}`; yield plain text tokens
+   - raise `LLMError` with a readable message for failures the user should see
+   - override `is_configured()` (required keys present) and `context_tokens` (repo-context budget) if needed
+2. Register the class in `PROVIDERS` in `backend/llm/registry.py` (optionally add an alias in `ALIASES`).
+3. Document its env vars in `backend/.env.example` and the table above.
 
 ## Key Design Decisions
 
@@ -100,7 +145,7 @@ npm run dev
 Rather than stuffing the entire repo into the prompt (impossible for large repos), the backend scores each file chunk by keyword overlap with the user's prompt, prioritizing explicitly pinned files. The top chunks are greedily packed up to a token budget.
 
 ### Streaming
-Responses stream token-by-token from Claude → FastAPI `StreamingResponse` → `fetch` ReadableStream in the browser. The chat bubble updates live as tokens arrive.
+Responses stream token-by-token from the LLM provider → FastAPI `StreamingResponse` → `fetch` ReadableStream in the browser. The chat bubble updates live as tokens arrive.
 
 ### Session management
 Repo context and conversation history are stored in-memory per `session_id` (a UUID generated on page load). For production, move this to Redis.
@@ -114,7 +159,13 @@ backend/
 ├── models.py          Pydantic schemas
 ├── github_client.py   GitHub API — list repos, fetch tree + file contents
 ├── repo_parser.py     Chunk files, select relevant context
-├── claude_client.py   Anthropic streaming client
+├── llm/               Provider-agnostic LLM layer
+│   ├── base.py                LLMProvider interface + LLMError
+│   ├── registry.py            Provider selection, aliases, fallback
+│   ├── prompt.py              System prompt + repo context
+│   ├── ollama_provider.py     Ollama (open-weight, default)
+│   ├── anthropic_provider.py  Claude
+│   └── openai_provider.py     OpenAI / OpenAI-compatible
 └── requirements.txt
 
 frontend/src/
@@ -135,5 +186,5 @@ frontend/src/
 
 - **Vector search**: Replace keyword scoring in `repo_parser.py` with embeddings (e.g. `sentence-transformers` + FAISS) for better chunk retrieval on large repos.
 - **Private repos**: Already supported — add a `GITHUB_TOKEN` with `repo` scope.
-- **Apply patches**: Add a `POST /apply` endpoint that writes Claude's suggested changes back to a local clone via `gitpython`.
+- **Apply patches**: Add a `POST /apply` endpoint that writes the model's suggested changes back to a local clone via `gitpython`.
 - **Auth**: Add FastAPI dependency injection with API key or OAuth for multi-user deployments.
