@@ -25,6 +25,8 @@ class ChatRequest(BaseModel):
     session_id: str
     prompt: str
     context_files: list[str] = []  # filenames to prioritize in context
+    provider: Optional[str] = None  # overrides LLM_PROVIDER for this request
+    model: Optional[str] = None  # overrides the provider's default model
 
 
 class TreeNode(BaseModel):
@@ -50,7 +52,21 @@ class LoadRepoResponse(BaseModel):
     file_count: int
     tree: list[TreeNode]
     meta: RepoMeta
+    provider: str
     model: str
+
+
+class ProviderInfo(BaseModel):
+    name: str
+    default_model: str
+    configured: bool
+
+
+class ProvidersResponse(BaseModel):
+    default_provider: str
+    default_model: str
+    fallback_providers: list[str]
+    providers: list[ProviderInfo]
 
 
 class TreeResponse(BaseModel):

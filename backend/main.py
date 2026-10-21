@@ -7,10 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
 
-from models import LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse, RepoListResponse
+from models import (
+    LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse, RepoListResponse, ProvidersResponse,
+)
 from github_client import GitHubClient
 from repo_parser import RepoParser
-from claude_client import ClaudeClient, MODEL
+import llm
 import db
 
 app = FastAPI(title="Repo Assistant API")
@@ -28,9 +30,22 @@ sessions: dict[str, dict] = {}
 
 github = GitHubClient()
 parser = RepoParser()
-claude = ClaudeClient()
+# Resolve both at startup so a misspelled LLM_PROVIDER / LLM_FALLBACK_PROVIDERS fails fast.
+default_llm = llm.get_provider()
+llm.fallback_provider_names()
 
 db.init_db()
+
+
+@app.get("/llm/providers", response_model=ProvidersResponse)
+async def list_providers():
+    """Return the configured default/fallback providers and every provider the API supports."""
+    return ProvidersResponse(
+        default_provider=default_llm.name,
+        default_model=default_llm.model,
+        fallback_providers=llm.fallback_provider_names(),
+        providers=llm.describe_providers(),
+    )
 
 
 @app.get("/repos", response_model=RepoListResponse)
@@ -85,7 +100,8 @@ async def load_repo(req: LoadRepoRequest):
         file_count=len(files),
         tree=tree[:200],  # send first 200 tree entries to frontend
         meta=meta,
-        model=MODEL,
+        provider=default_llm.name,
+        model=default_llm.model,
     )
 
 
@@ -100,31 +116,45 @@ async def get_tree(session_id: str):
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    """Stream a code generation response from Claude."""
+    """Stream a code generation response from the selected LLM provider."""
     session = sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found — load a repo first")
+
+    try:
+        chain = llm.provider_chain(req.provider, req.model)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     relevant_chunks = parser.select_relevant_chunks(
         session["chunks"],
         req.prompt,
         context_files=req.context_files,
-        max_tokens=60_000,
+        # A fallback may have a smaller context window than the primary provider.
+        max_tokens=min(p.context_tokens for p in chain),
     )
 
     history = session["history"]
+    system = llm.build_system_prompt(session["owner"], session["repo"], relevant_chunks)
+    messages = [*history, {"role": "user", "content": req.prompt}]
+
+    # Errors before the first token become a proper HTTP error the UI can show.
+    try:
+        provider, first_token, rest = await llm.open_stream(chain, system, messages)
+    except llm.LLMError as e:
+        raise HTTPException(status_code=502, detail=f"LLM error — {e}")
 
     async def stream():
-        full_response = ""
-        async for token in claude.stream(
-            repo_owner=session["owner"],
-            repo_name=session["repo"],
-            relevant_chunks=relevant_chunks,
-            history=history,
-            user_message=req.prompt,
-        ):
-            full_response += token
-            yield token
+        full_response = first_token
+        yield first_token
+        try:
+            async for token in rest:
+                full_response += token
+                yield token
+        except llm.LLMError as e:
+            # Headers are already sent, so report mid-stream failures inline.
+            yield f"\n\n[{provider.label} error: {e}]"
+            return
 
         history.append({"role": "user", "content": req.prompt})
         history.append({"role": "assistant", "content": full_response})

@@ -66,6 +66,7 @@ export default function InfoPanel({ repo, messages, contextFiles }) {
             <StatRow label="Forks" value={meta?.forks?.toLocaleString()} />
             <StatRow label="Open issues" value={meta?.open_issues} />
             <StatRow label="Last push" value={timeSince(meta?.last_push)} />
+            <StatRow label="Provider" value={repo.provider} />
             <StatRow label="Model" value={repo.model?.replace(/^claude-/, "")} color="blue" />
 
             {topLangs.length > 0 && (
