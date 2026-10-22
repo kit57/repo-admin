@@ -1,9 +1,11 @@
 import os
+import uuid
 
 from .anthropic_provider import AnthropicProvider
 from .base import LLMError, LLMProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
+from .tracing import traced_stream
 
 # To add a provider: subclass LLMProvider and register it here.
 PROVIDERS: dict[str, type[LLMProvider]] = {
@@ -59,25 +61,37 @@ def provider_chain(name: str | None = None, model: str | None = None) -> list[LL
     return chain
 
 
-async def open_stream(chain: list[LLMProvider], system: str, messages: list[dict]):
+async def open_stream(
+    chain: list[LLMProvider],
+    system: str,
+    messages: list[dict],
+    *,
+    feature: str,
+    session_id: str | None = None,
+):
     """Start streaming from the first provider in the chain that produces a token.
 
     Falling back is only possible before anything has been sent to the client,
-    so each provider is primed with its first token here. Returns
-    (provider, first_token, rest_of_stream).
+    so each provider is primed with its first token here. Every attempt is
+    traced under one request id. Returns
+    (provider, first_token, rest_of_stream, request_id).
     """
+    request_id = str(uuid.uuid4())
     errors = []
-    for provider in chain:
-        stream = provider.stream(system, messages)
+    for attempt, provider in enumerate(chain):
+        stream = traced_stream(
+            provider, system, messages,
+            request_id=request_id, attempt=attempt, feature=feature, session_id=session_id,
+        )
         try:
             first = await anext(stream)
         except StopAsyncIteration:
-            return provider, "", stream
+            return provider, "", stream, request_id
         except LLMError as e:
             await stream.aclose()
             errors.append(f"{provider.label}: {e}")
             continue
-        return provider, first, stream
+        return provider, first, stream, request_id
     raise LLMError(" | ".join(errors))
 
 

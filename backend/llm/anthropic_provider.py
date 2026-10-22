@@ -1,6 +1,6 @@
 import os
 
-from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider
+from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, Usage
 
 
 def _api_key() -> str | None:
@@ -30,7 +30,7 @@ class AnthropicProvider(LLMProvider):
             self._client = anthropic.AsyncAnthropic(api_key=_api_key())
         return self._client
 
-    async def stream(self, system: str, messages: list[dict]):
+    async def stream(self, system: str, messages: list[dict], usage: Usage):
         import anthropic
 
         client = self._get_client()
@@ -43,5 +43,10 @@ class AnthropicProvider(LLMProvider):
             ) as stream:
                 async for text in stream.text_stream:
                     yield text
+                final = (await stream.get_final_message()).usage
+                usage.input_tokens = final.input_tokens
+                usage.output_tokens = final.output_tokens
+                usage.cache_read_tokens = final.cache_read_input_tokens or 0
+                usage.cache_write_tokens = final.cache_creation_input_tokens or 0
         except anthropic.APIError as e:
             raise LLMError(f"Anthropic API error: {e}") from e

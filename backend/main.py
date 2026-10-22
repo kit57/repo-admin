@@ -2,13 +2,17 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must run before the clients below read their env vars
 
-from fastapi import FastAPI, HTTPException
+from dataclasses import asdict
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
 
 from models import (
     LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse, RepoListResponse, ProvidersResponse,
+    LLMCallsResponse, UsageSummaryResponse,
 )
 from github_client import GitHubClient
 from repo_parser import RepoParser
@@ -23,6 +27,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-LLM-Request-Id"],
 )
 
 # In-memory session store: session_id -> parsed repo context
@@ -35,6 +40,31 @@ default_llm = llm.get_provider()
 llm.fallback_provider_names()
 
 db.init_db()
+# Every LLM call is logged as JSON, stored in SQLite and, if configured, exported via OpenTelemetry.
+llm.configure_tracing(extra_sinks=[lambda call: db.insert_llm_call(asdict(call))])
+
+
+@app.get("/usage/calls", response_model=LLMCallsResponse)
+async def list_llm_calls(
+    limit: int = Query(100, ge=1, le=1000),
+    since: str | None = Query(None, description="ISO date/time (UTC), e.g. 2026-10-01"),
+    session_id: str | None = None,
+    provider: str | None = None,
+):
+    """Most recent LLM calls with their token counts, cost and latency."""
+    return LLMCallsResponse(calls=db.list_llm_calls(limit, since, session_id, provider))
+
+
+@app.get("/usage/summary", response_model=UsageSummaryResponse)
+async def usage_summary(
+    group_by: Literal["provider", "model", "feature", "session", "status", "day"] | None = None,
+    since: str | None = Query(None, description="ISO date/time (UTC), e.g. 2026-10-01"),
+    session_id: str | None = None,
+    provider: str | None = None,
+):
+    """Aggregated token usage and cost, in total and optionally grouped."""
+    summary = db.summarize_llm_calls(group_by, since, session_id, provider)
+    return UsageSummaryResponse(group_by=group_by, **summary)
 
 
 @app.get("/llm/providers", response_model=ProvidersResponse)
@@ -140,7 +170,9 @@ async def chat(req: ChatRequest):
 
     # Errors before the first token become a proper HTTP error the UI can show.
     try:
-        provider, first_token, rest = await llm.open_stream(chain, system, messages)
+        provider, first_token, rest, request_id = await llm.open_stream(
+            chain, system, messages, feature="chat", session_id=req.session_id,
+        )
     except llm.LLMError as e:
         raise HTTPException(status_code=502, detail=f"LLM error — {e}")
 
@@ -155,6 +187,9 @@ async def chat(req: ChatRequest):
             # Headers are already sent, so report mid-stream failures inline.
             yield f"\n\n[{provider.label} error: {e}]"
             return
+        finally:
+            # Close promptly on client disconnect so the call is traced as cancelled right away.
+            await rest.aclose()
 
         history.append({"role": "user", "content": req.prompt})
         history.append({"role": "assistant", "content": full_response})
@@ -162,7 +197,9 @@ async def chat(req: ChatRequest):
         if len(history) > 40:
             session["history"] = history[-40:]
 
-    return StreamingResponse(stream(), media_type="text/plain")
+    return StreamingResponse(
+        stream(), media_type="text/plain", headers={"X-LLM-Request-Id": request_id},
+    )
 
 
 @app.delete("/session/{session_id}")

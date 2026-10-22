@@ -1,0 +1,3 @@
+# Optional: export LLM usage (spans + metrics) over OTLP. See "LLM usage & cost tracing" in the README.
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0

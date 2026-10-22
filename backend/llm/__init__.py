@@ -1,4 +1,4 @@
-from .base import LLMError, LLMProvider
+from .base import LLMError, LLMProvider, Usage
 from .prompt import build_system_prompt
 from .registry import (
     PROVIDERS,
@@ -9,3 +9,4 @@ from .registry import (
     open_stream,
     provider_chain,
 )
+from .tracing import CallRecord, add_sink, configure_tracing

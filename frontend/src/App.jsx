@@ -7,7 +7,7 @@ import { useSession } from "./hooks/useSession";
 
 export default function App() {
   const {
-    repo, messages, loading, error,
+    repo, messages, loading, error, usage,
     contextFiles, addContextFile, removeContextFile,
     load, chat,
   } = useSession();
@@ -99,6 +99,7 @@ export default function App() {
             repo={repo}
             messages={messages}
             contextFiles={contextFiles}
+            usage={usage}
           />
         </div>
       )}

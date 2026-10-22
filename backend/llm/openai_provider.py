@@ -3,7 +3,7 @@ import os
 
 import aiohttp
 
-from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider
+from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, Usage
 
 TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=300)
 OPENAI_URL = "https://api.openai.com/v1"
@@ -27,7 +27,7 @@ class OpenAIProvider(LLMProvider):
         has_auth = bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_BASE_URL"))
         return has_auth and bool(cls.default_model)
 
-    async def stream(self, system: str, messages: list[dict]):
+    async def stream(self, system: str, messages: list[dict], usage: Usage):
         if not self.model:
             raise LLMError("OPENAI_MODEL is not set")
         if not self.api_key and self.base_url == OPENAI_URL:
@@ -37,6 +37,8 @@ class OpenAIProvider(LLMProvider):
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
             "stream": True,
+            # Ask for a final chunk with token counts; servers that ignore it get estimated usage.
+            "stream_options": {"include_usage": True},
         }
         # OpenAI's current models reject the legacy field; compatible servers often only know it.
         token_field = "max_completion_tokens" if self.base_url == OPENAI_URL else "max_tokens"
@@ -57,9 +59,20 @@ class OpenAIProvider(LLMProvider):
                         data = line[len("data:"):].strip()
                         if data == "[DONE]":
                             break
-                        choices = json.loads(data).get("choices") or []
+                        chunk = json.loads(data)
+                        choices = chunk.get("choices") or []
                         token = choices[0].get("delta", {}).get("content") if choices else None
                         if token:
                             yield token
+                        if chunk.get("usage"):
+                            self._record_usage(chunk["usage"], usage)
         except aiohttp.ClientError as e:
             raise LLMError(f"Can't reach OpenAI-compatible API at {self.base_url}: {e}") from e
+
+    @staticmethod
+    def _record_usage(reported: dict, usage: Usage) -> None:
+        # prompt_tokens includes cached tokens; split them out to match the other providers.
+        cached = (reported.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+        usage.input_tokens = reported.get("prompt_tokens", 0) - cached
+        usage.output_tokens = reported.get("completion_tokens", 0)
+        usage.cache_read_tokens = cached

@@ -35,6 +35,12 @@ export async function getTree(sessionId) {
   return res.json();
 }
 
+export async function getSessionUsage(sessionId) {
+  const params = new URLSearchParams({ session_id: sessionId });
+  const data = await jsonOrThrow(await fetch(`${BASE}/usage/summary?${params}`), "Failed to fetch usage");
+  return data.total;
+}
+
 /**
  * Stream a chat response. Calls onToken for each streamed chunk.
  * Returns the full response string.
