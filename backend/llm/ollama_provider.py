@@ -3,7 +3,7 @@ import os
 
 import aiohttp
 
-from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider
+from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, Usage
 
 # Local models can take a while to load into memory before the first token.
 TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=600)
@@ -29,7 +29,7 @@ class OllamaProvider(LLMProvider):
         # Leave room for the reply, the system prompt and chat history.
         return max(self.num_ctx - self.max_tokens - 4_000, 2_000)
 
-    async def stream(self, system: str, messages: list[dict]):
+    async def stream(self, system: str, messages: list[dict], usage: Usage):
         payload = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
@@ -55,6 +55,11 @@ class OllamaProvider(LLMProvider):
                         if token:
                             yield token
                         if data.get("done"):
+                            # The final line carries the counts; prompt_eval_count excludes
+                            # prompt tokens Ollama reused from its cache.
+                            usage.input_tokens = data.get("prompt_eval_count", 0)
+                            usage.output_tokens = data.get("eval_count", 0)
+                            usage.cache_read_tokens = data.get("prompt_eval_cached_count", 0)
                             break
         except aiohttp.ClientConnectorError as e:
             raise LLMError(

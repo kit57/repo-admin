@@ -98,3 +98,52 @@ class RepoSummary(BaseModel):
 class RepoListResponse(BaseModel):
     repos: list[RepoSummary]
     synced_at: Optional[str] = None
+
+
+class LLMCall(BaseModel):
+    id: str
+    request_id: str
+    started_at: str
+    provider: str
+    model: str
+    feature: str
+    session_id: Optional[str] = None
+    attempt: int
+    status: str  # "ok" | "error" | "cancelled"
+    error: Optional[str] = None
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    estimated: bool
+    cost_usd: Optional[float] = None  # None when the model has no known price
+    latency_ms: float
+    ttft_ms: Optional[float] = None
+
+
+class LLMCallsResponse(BaseModel):
+    calls: list[LLMCall]
+
+
+class UsageStats(BaseModel):
+    calls: int
+    errors: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: float  # sum over priced calls
+    unpriced_calls: int  # calls whose model has no known price (not included in cost_usd)
+    estimated_calls: int
+    avg_latency_ms: Optional[float] = None
+    avg_ttft_ms: Optional[float] = None
+
+
+class UsageGroup(UsageStats):
+    key: Optional[str] = None
+
+
+class UsageSummaryResponse(BaseModel):
+    group_by: Optional[str] = None
+    total: UsageStats
+    groups: list[UsageGroup]

@@ -95,6 +95,10 @@ npm run dev
 | `OPENAI_MODEL` | `openai` | Model name — no default |
 | `OPENAI_BASE_URL` | — | Defaults to `https://api.openai.com/v1`; set it for any OpenAI-compatible API (OpenRouter, Groq, vLLM, LM Studio...) |
 | `DB_PATH` | — | SQLite file, defaults to `backend/repo_admin.db` |
+| `LLM_USAGE_LOG` | — | Print one JSON line per LLM call to stdout, defaults to `true` |
+| `LLM_PRICING_FILE` | — | JSON file adding or overriding model prices (see [LLM usage & cost tracing](#llm-usage--cost-tracing)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Enables OpenTelemetry export, e.g. `http://localhost:4318` |
+| `OTEL_SERVICE_NAME` | — | Service name on exported data, defaults to `repo-admin-backend` |
 
 ### Frontend (`frontend/.env`)
 
@@ -132,12 +136,82 @@ costs nothing per token and needs no API key.
 
 1. Create `backend/llm/<name>_provider.py` with a subclass of `LLMProvider` (`backend/llm/base.py`):
    - set `name` and `default_model`
-   - implement `async def stream(self, system, messages)` — `messages` is a list of
+   - implement `async def stream(self, system, messages, usage)` — `messages` is a list of
      `{"role": "user" | "assistant", "content": str}`; yield plain text tokens
+   - fill in `usage` (`input_tokens` without cached tokens, `output_tokens`, `cache_read_tokens`,
+     `cache_write_tokens`) from the provider's response. Fields you leave as `None` are estimated
+     from text length and flagged `estimated`
    - raise `LLMError` with a readable message for failures the user should see
    - override `is_configured()` (required keys present) and `context_tokens` (repo-context budget) if needed
 2. Register the class in `PROVIDERS` in `backend/llm/registry.py` (optionally add an alias in `ALIASES`).
-3. Document its env vars in `backend/.env.example` and the table above.
+3. Add its prices to `DEFAULT_PRICES` in `backend/llm/pricing.py` (or leave them to `LLM_PRICING_FILE`).
+4. Document its env vars in `backend/.env.example` and the table above.
+
+Tracing needs nothing else: every provider is wrapped by `llm/tracing.py` automatically.
+
+## LLM usage & cost tracing
+
+Every LLM call, for every provider and including failed fallback attempts, produces one
+record with:
+
+| Field | Meaning |
+|---|---|
+| `input_tokens`, `output_tokens` | Uncached input and output tokens, as reported by the provider |
+| `cache_read_tokens`, `cache_write_tokens` | Prompt-cache tokens (billed at their own rates) |
+| `estimated` | `true` when the provider didn't report counts and they were estimated (~4 chars/token) |
+| `cost_usd` | Cost from the pricing table; `null` when the model has no known price |
+| `latency_ms`, `ttft_ms` | Total duration and time to first token |
+| `status`, `error` | `ok`, `error` or `cancelled` (client disconnected mid-stream) |
+| `provider`, `model`, `feature`, `session_id` | Dimensions to aggregate on |
+| `request_id`, `attempt` | Groups a request's primary and fallback attempts; returned to clients in the `X-LLM-Request-Id` header |
+
+Where token counts come from: Claude → `usage` on the final message (including cache tokens);
+Ollama → `prompt_eval_count` / `eval_count`; OpenAI-compatible → the `usage` chunk requested with
+`stream_options.include_usage` (estimated if the server ignores it).
+
+Each record goes to every **sink**. Sinks run after the stream ends, so they don't delay the
+response, and a failing sink never fails a request:
+
+- **SQLite** (always on) — query it through the API:
+  - `GET /usage/summary?group_by=model&since=2026-10-01` — totals plus one row per group
+    (`provider`, `model`, `feature`, `session`, `status` or `day`). Also filters by `session_id` / `provider`.
+  - `GET /usage/calls?limit=50&provider=anthropic` — the most recent individual calls.
+  - The info panel in the UI shows the current session's tokens and cost from this endpoint.
+- **JSON log line** (on by default, `LLM_USAGE_LOG=false` to disable) — one
+  `{"event": "llm_call", ...}` line per call on stdout, ready for Datadog, Loki, CloudWatch or
+  any other log pipeline to parse and chart.
+- **OpenTelemetry** (opt-in) — `pip install -r requirements-otel.txt` (or build the Docker image
+  with `WITH_OTEL=true docker compose up --build`) and set `OTEL_EXPORTER_OTLP_ENDPOINT`. Each
+  call becomes a `chat <model>` span plus metrics, using the GenAI semantic conventions:
+  - span attributes `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`,
+    `gen_ai.usage.output_tokens`, `llm.cost.usd`, `llm.time_to_first_token_ms`, `session.id`, …
+  - metrics `gen_ai.client.token.usage` (by `gen_ai.token.type`), `gen_ai.client.operation.duration`,
+    `llm.cost` (USD) and `llm.calls` (by `llm.status`)
+
+  Point it at an OpenTelemetry Collector, or straight at the Datadog Agent's OTLP receiver
+  (`http://<agent>:4318`), Grafana Alloy, Honeycomb, Jaeger, etc. Standard `OTEL_*` variables
+  (headers, resource attributes) are honored.
+- **Custom sinks** — `llm.add_sink(fn)` registers any `fn(CallRecord)`, e.g. to push to a
+  queue or a billing system.
+
+### Pricing
+
+Built-in prices (USD per 1M tokens) live in `backend/llm/pricing.py`: Anthropic first-party rates
+as of 2026-10-06 for the current Claude models, and `0` for every Ollama model. OpenAI and other
+OpenAI-compatible models have no built-in price: their calls are tracked with `cost_usd: null`
+(counted as `unpriced_calls` in summaries) until you add them. To add or override prices, point
+`LLM_PRICING_FILE` at a JSON file. Keys are `provider/model`, or `provider/*` for every model
+of a provider:
+
+```json
+{
+  "openai/my-model": {"input": 1.25, "output": 10.0, "cache_read": 0.125},
+  "anthropic/claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5}
+}
+```
+
+Costs are estimates from list prices. Your provider's invoice is the source of truth (it may
+include discounts, batch rates, or long-context tiers that aren't modeled here).
 
 ## Key Design Decisions
 
@@ -155,7 +229,7 @@ Repo context and conversation history are stored in-memory per `session_id` (a U
 ```
 backend/
 ├── main.py            FastAPI app and routes
-├── db.py              SQLite storage for the repo list
+├── db.py              SQLite storage for the repo list and LLM usage
 ├── models.py          Pydantic schemas
 ├── github_client.py   GitHub API — list repos, fetch tree + file contents
 ├── repo_parser.py     Chunk files, select relevant context
@@ -163,10 +237,14 @@ backend/
 │   ├── base.py                LLMProvider interface + LLMError
 │   ├── registry.py            Provider selection, aliases, fallback
 │   ├── prompt.py              System prompt + repo context
+│   ├── tracing.py             Per-call token/cost/latency records + sinks
+│   ├── pricing.py             Price table (USD per 1M tokens)
+│   ├── otel.py                Optional OpenTelemetry export
 │   ├── ollama_provider.py     Ollama (open-weight, default)
 │   ├── anthropic_provider.py  Claude
 │   └── openai_provider.py     OpenAI / OpenAI-compatible
-└── requirements.txt
+├── requirements.txt
+└── requirements-otel.txt      Optional OpenTelemetry exporter
 
 frontend/src/
 ├── main.jsx                   Entry point

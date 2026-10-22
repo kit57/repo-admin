@@ -3,8 +3,12 @@ FROM python:3.13-slim AS dependencies
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 
-COPY backend/requirements.txt ./requirements.txt
-RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+# Build with WITH_OTEL=true to include the optional OpenTelemetry exporter.
+ARG WITH_OTEL=false
+
+COPY backend/requirements.txt backend/requirements-otel.txt ./
+RUN if [ "$WITH_OTEL" = "true" ]; then cat requirements-otel.txt >> requirements.txt; fi \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
 FROM python:3.13-slim
 
@@ -15,7 +19,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY --from=dependencies /wheels /wheels
-COPY backend/requirements.txt ./requirements.txt
+COPY --from=dependencies /build/requirements.txt ./requirements.txt
 RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
     && rm -rf /wheels requirements.txt \
     && groupadd --system app \

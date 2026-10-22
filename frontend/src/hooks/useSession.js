@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { loadRepo, streamChat, clearSession } from "../api/client";
+import { loadRepo, streamChat, clearSession, getSessionUsage } from "../api/client";
 
 export function useSession() {
   const [sessionId] = useState(() => crypto.randomUUID());
@@ -8,6 +8,7 @@ export function useSession() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [contextFiles, setContextFiles] = useState([]);
+  const [usage, setUsage] = useState(null);     // UsageStats for this session, from the backend
 
   const load = useCallback(async (url) => {
     setLoading(true);
@@ -53,6 +54,8 @@ export function useSession() {
     } catch (e) {
       setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: `Error: ${e.message}` }]);
     }
+    // Usage is informational; a failure here shouldn't surface as a chat error.
+    getSessionUsage(sessionId).then(setUsage).catch(() => {});
   }, [repo, sessionId, contextFiles]);
 
   const addContextFile = useCallback((path) => {
@@ -68,10 +71,11 @@ export function useSession() {
     setRepo(null);
     setMessages([]);
     setContextFiles([]);
+    setUsage(null);
   }, [sessionId]);
 
   return {
-    sessionId, repo, messages, loading, error,
+    sessionId, repo, messages, loading, error, usage,
     contextFiles, addContextFile, removeContextFile,
     load, chat, reset,
   };

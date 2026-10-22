@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        WITH_OTEL: ${WITH_OTEL:-false}
     env_file:
       - ./backend/.env
     environment:

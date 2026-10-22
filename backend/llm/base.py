@@ -1,6 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 # Shared default for every provider; each one may override it with its own env var.
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS") or 8000)
@@ -8,6 +9,20 @@ DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS") or 8000)
 
 class LLMError(Exception):
     """A provider failed in a way the user should be told about (unreachable, bad key, unknown model...)."""
+
+
+@dataclass
+class Usage:
+    """Token counts reported by the provider for one call; filled in by LLMProvider.stream.
+
+    input_tokens excludes cached tokens, which are counted separately because
+    they are billed at different rates. None means the provider didn't report it.
+    """
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class LLMProvider(ABC):
@@ -39,5 +54,9 @@ class LLMProvider(ABC):
         return 60_000
 
     @abstractmethod
-    def stream(self, system: str, messages: list[dict]) -> AsyncIterator[str]:
-        """Yield response tokens. Raise LLMError for user-facing failures."""
+    def stream(self, system: str, messages: list[dict], usage: Usage) -> AsyncIterator[str]:
+        """Yield response tokens and record the provider's token counts in `usage`.
+
+        Raise LLMError for user-facing failures. Leave a `usage` field as None when
+        the provider doesn't report it; tracing then estimates it from the text.
+        """

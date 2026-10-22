@@ -30,7 +30,23 @@ function LangBar({ name, bytes, total }) {
   );
 }
 
-export default function InfoPanel({ repo, messages, contextFiles }) {
+const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+
+function formatTokens(usage) {
+  if (!usage?.calls) return "—";
+  const input = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens;
+  const prefix = usage.estimated_calls ? "~" : "";
+  return `${prefix}${kTokens(input)} / ${kTokens(usage.output_tokens)}`;
+}
+
+function formatCost(usage) {
+  if (!usage?.calls) return "—";
+  if (usage.unpriced_calls === usage.calls) return "n/a (no price set)";
+  const cost = `$${usage.cost_usd.toFixed(usage.cost_usd < 0.01 ? 4 : 2)}`;
+  return usage.unpriced_calls ? `${cost} + unpriced` : cost;
+}
+
+export default function InfoPanel({ repo, messages, contextFiles, usage }) {
   const meta = repo?.meta;
 
   const totalLangBytes = useMemo(() => {
@@ -46,7 +62,6 @@ export default function InfoPanel({ repo, messages, contextFiles }) {
   }, [meta]);
 
   const aiMessages = messages.filter(m => m.role === "assistant").length;
-  const tokenEstimate = messages.reduce((acc, m) => acc + Math.round(m.content.length / 4), 0);
 
   return (
     <div className="right-panel">
@@ -81,10 +96,8 @@ export default function InfoPanel({ repo, messages, contextFiles }) {
             <div className="section-title">This session</div>
             <StatRow label="Messages" value={messages.length} />
             <StatRow label="AI responses" value={aiMessages} color="green" />
-            <StatRow
-              label="Tokens (est.)"
-              value={`~${(tokenEstimate / 1000).toFixed(1)}k`}
-            />
+            <StatRow label="Tokens in / out" value={formatTokens(usage)} />
+            <StatRow label="Cost" value={formatCost(usage)} color="green" />
             <StatRow label="Files pinned" value={contextFiles.length} color="blue" />
 
             {meta?.description && (
