@@ -4,6 +4,28 @@ import { timeSince, daysSince } from "../utils/time";
 
 // Repos with no push in this many days are flagged as stale
 const STALE_DAYS = 90;
+const DEFAULT_SORT = { column: "pushed_at", direction: "desc" };
+const SORT_DIRECTIONS = {
+  full_name: "asc",
+  language: "asc",
+  pushed_at: "desc",
+  open_issues: "desc",
+  stars: "desc",
+};
+
+function compareRepos(a, b, column, direction) {
+  const aValue = a[column];
+  const bValue = b[column];
+  const aEmpty = aValue == null || aValue === "";
+  const bEmpty = bValue == null || bValue === "";
+
+  if (aEmpty || bEmpty) return aEmpty === bEmpty ? 0 : aEmpty ? 1 : -1;
+  if (column === "full_name" || column === "language") {
+    return direction * String(aValue).localeCompare(String(bValue), undefined, { sensitivity: "base" });
+  }
+  if (column === "pushed_at") return direction * (new Date(aValue).getTime() - new Date(bValue).getTime());
+  return direction * (aValue - bValue);
+}
 
 function Badge({ children, tone }) {
   return <span className={`badge ${tone || ""}`}>{children}</span>;
@@ -17,6 +39,7 @@ export default function RepoList({ onOpen, openingUrl }) {
   const [filter, setFilter] = useState("");
   const [hideArchived, setHideArchived] = useState(true);
   const [hideForks, setHideForks] = useState(false);
+  const [sort, setSort] = useState(DEFAULT_SORT);
 
   const apply = (data) => {
     setRepos(data.repos);
@@ -51,12 +74,34 @@ export default function RepoList({ onOpen, openingUrl }) {
 
   const visible = useMemo(() => {
     const q = filter.toLowerCase();
-    return repos.filter(r =>
+    const filtered = repos.filter(r =>
       (!hideArchived || !r.archived) &&
       (!hideForks || !r.fork) &&
       (!q || r.full_name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q))
     );
-  }, [repos, filter, hideArchived, hideForks]);
+    const direction = sort.direction === "asc" ? 1 : -1;
+    return filtered.sort((a, b) => compareRepos(a, b, sort.column, direction));
+  }, [repos, filter, hideArchived, hideForks, sort]);
+
+  const toggleSort = column => {
+    setSort(current => current.column === column
+      ? { column, direction: current.direction === "asc" ? "desc" : "asc" }
+      : { column, direction: SORT_DIRECTIONS[column] }
+    );
+  };
+
+  const sortHeader = (label, column, numeric = false) => {
+    const active = sort.column === column;
+    const direction = active ? sort.direction : null;
+    const arrow = direction === "asc" ? "↑" : "↓";
+    return (
+      <th className={numeric ? "num" : undefined} aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}>
+        <button className="repo-sort-button" onClick={() => toggleSort(column)}>
+          {label}{active && <span aria-hidden="true"> {arrow}</span>}
+        </button>
+      </th>
+    );
+  };
 
   const staleCount = visible.filter(r => !r.archived && daysSince(r.pushed_at) > STALE_DAYS).length;
 
@@ -93,11 +138,11 @@ export default function RepoList({ onOpen, openingUrl }) {
         <table className="repo-table">
           <thead>
             <tr>
-              <th>Repository</th>
-              <th>Language</th>
-              <th>Last push</th>
-              <th className="num">Issues</th>
-              <th className="num">Stars</th>
+              {sortHeader("Repository", "full_name")}
+              {sortHeader("Language", "language")}
+              {sortHeader("Last push", "pushed_at")}
+              {sortHeader("Issues", "open_issues", true)}
+              {sortHeader("Stars", "stars", true)}
               <th />
             </tr>
           </thead>
