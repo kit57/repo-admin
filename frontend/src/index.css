@@ -510,6 +510,20 @@ pre {
   padding: 8px 16px;
   border-bottom: 1px solid var(--border);
 }
+.repo-sort-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.repo-sort-button:hover,
+.repo-sort-button:focus-visible { color: var(--text); }
+.repo-sort-button:focus-visible { outline: 1px solid var(--accent); outline-offset: 3px; }
+.repo-table th.num .repo-sort-button { text-align: right; }
 .repo-table td {
   padding: 9px 16px;
   border-bottom: 1px solid var(--border);
