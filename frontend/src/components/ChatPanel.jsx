@@ -1,50 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-
-// Minimal markdown: bold, inline code, code blocks
-function renderContent(text) {
-  const blocks = [];
-  const lines = text.split("\n");
-  let i = 0;
-
-  while (i < lines.length) {
-    // Code block
-    if (lines[i].startsWith("```")) {
-      const lang = lines[i].slice(3).trim() || "code";
-      const codeLines = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++; // skip closing ```
-      blocks.push({ type: "code", lang, content: codeLines.join("\n") });
-      continue;
-    }
-    blocks.push({ type: "text", content: lines[i] });
-    i++;
-  }
-
-  return blocks;
-}
-
-const INLINE_CODE_STYLE = {
-  fontFamily: "var(--mono)", fontSize: 11, background: "var(--bg)",
-  padding: "1px 5px", borderRadius: 3,
-};
-
-// Returns React nodes rather than an HTML string, so any markup in the
-// message text is rendered as plain text instead of being injected.
-function inlineFormat(text) {
-  return text.split(/(\*\*.+?\*\*|`[^`]+`)/g).map((part, i) => {
-    if (part.length > 4 && part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i} style={INLINE_CODE_STYLE}>{part.slice(1, -1)}</code>;
-    }
-    return part;
-  });
-}
+import { Children, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function CodeBlock({ lang, content }) {
   const [copied, setCopied] = useState(false);
@@ -64,25 +20,30 @@ function CodeBlock({ lang, content }) {
   );
 }
 
+function MarkdownCodeBlock({ children }) {
+  const code = Children.toArray(children).find(child => child.type === "code");
+  const language = code?.props.className?.match(/language-([\w-]+)/)?.[1] || "code";
+  const content = String(code?.props.children ?? "").replace(/\n$/, "");
+  return <CodeBlock lang={language} content={content} />;
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: ({ href, children, ...props }) => href
+    ? <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>
+    : <>{children}</>,
+  pre: MarkdownCodeBlock,
+};
+
 function Message({ msg }) {
-  const blocks = renderContent(msg.content);
   return (
     <div className={`msg ${msg.role === "user" ? "user" : ""}`}>
       <div className={`avatar ${msg.role === "user" ? "user" : "ai"}`}>
         {msg.role === "user" ? "U" : "AI"}
       </div>
       <div className="bubble">
-        {blocks.map((block, idx) =>
-          block.type === "code" ? (
-            <CodeBlock key={idx} lang={block.lang} content={block.content} />
-          ) : (
-            block.content.trim() && (
-              <p key={idx} style={{ margin: "4px 0" }}>
-                {inlineFormat(block.content)}
-              </p>
-            )
-          )
-        )}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+          {msg.content}
+        </ReactMarkdown>
         {msg.streaming && (
           <span style={{
             display: "inline-block", width: 8, height: 14,
