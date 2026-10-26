@@ -61,6 +61,26 @@ class GitHubClient:
             last_push=data.get("pushed_at"),
         )
 
+    async def get_open_issues(self, owner: str, repo: str) -> list[dict]:
+        """Fetch open GitHub issues, excluding pull requests returned by the same API."""
+        issues = []
+        page = 1
+        async with aiohttp.ClientSession(headers=self.headers) as session:
+            while True:
+                params = {"state": "open", "per_page": 100, "page": page}
+                async with session.get(
+                    f"{GITHUB_API}/repos/{owner}/{repo}/issues",
+                    params=params,
+                ) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+
+                issues.extend(issue for issue in data if "pull_request" not in issue)
+                if len(data) < 100:
+                    break
+                page += 1
+        return issues
+
     async def list_user_repos(self) -> list[RepoSummary]:
         """List every repo the token's user owns or collaborates on (paginated)."""
         if "Authorization" not in self.headers:

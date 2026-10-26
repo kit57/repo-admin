@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before the clients below read their env vars
 
 from dataclasses import asdict
+import json
+import re
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -32,6 +34,17 @@ app.add_middleware(
 
 # In-memory session store: session_id -> parsed repo context
 sessions: dict[str, dict] = {}
+
+
+def _is_open_issue_list_request(prompt: str) -> bool:
+    mentions_issues = re.search(r"\bissues?\b", prompt, re.IGNORECASE)
+    requests_list = re.search(
+        r"\b(open|opened|list|show|fetch|find|display|retrieve|how many|count)\b",
+        prompt,
+        re.IGNORECASE,
+    )
+    return bool(mentions_issues and requests_list)
+
 
 github = GitHubClient()
 parser = RepoParser()
@@ -166,6 +179,30 @@ async def chat(req: ChatRequest):
 
     history = session["history"]
     system = llm.build_system_prompt(session["owner"], session["repo"], relevant_chunks)
+    if _is_open_issue_list_request(req.prompt):
+        try:
+            issues = await github.get_open_issues(session["owner"], session["repo"])
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"GitHub API error while fetching open issues: {e}")
+
+        issue_records = [
+            {
+                "number": issue["number"],
+                "title": issue["title"],
+                "url": issue["html_url"],
+                "author": issue.get("user", {}).get("login"),
+                "updated_at": issue.get("updated_at"),
+            }
+            for issue in issues
+        ]
+        system += (
+            "\n\n## Live GitHub Open Issues\n"
+            "The following records were fetched from GitHub for this repository when this message was received. "
+            "They contain issues only, not pull requests. Use these records for issue counts and links; do not "
+            "invent or supplement issue details.\n"
+            f"Open issue count: {len(issue_records)}\n"
+            f"Issues: {json.dumps(issue_records, ensure_ascii=False)}"
+        )
     messages = [*history, {"role": "user", "content": req.prompt}]
 
     # Errors before the first token become a proper HTTP error the UI can show.
