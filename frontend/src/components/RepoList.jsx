@@ -31,7 +31,7 @@ function Badge({ children, tone }) {
   return <span className={`badge ${tone || ""}`}>{children}</span>;
 }
 
-export default function RepoList({ onOpen, openingUrl }) {
+export default function RepoList({ onOpen, openingUrl, openError, onRetryOpen }) {
   const [repos, setRepos] = useState([]);
   const [syncedAt, setSyncedAt] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -133,6 +133,16 @@ export default function RepoList({ onOpen, openingUrl }) {
       </div>
 
       {error && <div className="repo-list-error">⚠ {error}</div>}
+      {openError && (
+        <div className="repo-list-error" role="alert">
+          Could not open repository: {openError}
+          {onRetryOpen && (
+            <button className="open-btn" onClick={onRetryOpen} disabled={!!openingUrl}>
+              Retry
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="repo-table-wrap">
         <table className="repo-table">
@@ -170,8 +180,9 @@ export default function RepoList({ onOpen, openingUrl }) {
                       className="open-btn"
                       onClick={() => onOpen(r.html_url)}
                       disabled={!!openingUrl}
+                      aria-label={`${openingUrl === r.html_url ? "Opening" : "Open"} ${r.full_name}`}
                     >
-                      {openingUrl === r.html_url ? "Loading…" : "Open"}
+                      {openingUrl === r.html_url ? "Opening…" : "Open"}
                     </button>
                   </td>
                 </tr>
