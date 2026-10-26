@@ -140,7 +140,18 @@ export default function ChatPanel({ messages, onSend, onCancel, contextFiles, on
             disabled={disabled}
           />
           {messages.some(message => message.streaming) ? (
-            <button className="cancel-btn" onClick={onCancel} type="button">Cancel</button>
+            <button
+              className="cancel-btn"
+              onClick={onCancel}
+              type="button"
+              aria-label="Cancel generation"
+              title="Cancel generation"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="6" y="5" width="4" height="14" rx="1" />
+                <rect x="14" y="5" width="4" height="14" rx="1" />
+              </svg>
+            </button>
           ) : (
             <button className="send-btn" onClick={send} disabled={disabled} type="button" aria-label="Send message">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
