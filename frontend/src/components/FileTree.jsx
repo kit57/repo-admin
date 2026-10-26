@@ -15,6 +15,8 @@ function getFileIcon(path) {
 function buildTree(nodes) {
   const root = {};
   for (const node of nodes) {
+    if (node.type !== "blob") continue;
+
     const parts = node.path.split("/");
     let cur = root;
     for (let i = 0; i < parts.length - 1; i++) {
