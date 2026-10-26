@@ -5,6 +5,7 @@ load_dotenv()  # must run before the clients below read their env vars
 from dataclasses import asdict
 import json
 import re
+import uuid
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -204,35 +205,44 @@ async def chat(req: ChatRequest):
             f"Issues: {json.dumps(issue_records, ensure_ascii=False)}"
         )
     messages = [*history, {"role": "user", "content": req.prompt}]
-
-    # Errors before the first token become a proper HTTP error the UI can show.
-    try:
-        provider, first_token, rest, request_id = await llm.open_stream(
-            chain, system, messages, feature="chat", session_id=req.session_id,
-        )
-    except llm.LLMError as e:
-        raise HTTPException(status_code=502, detail=f"LLM error — {e}")
+    request_id = str(uuid.uuid4())
 
     async def stream():
-        full_response = first_token
-        yield first_token
+        provider = None
+        rest = None
+        full_response = ""
+        completed = False
         try:
+            # Start the HTTP response before waiting for the provider's first token,
+            # so the client can cancel even while the model is still thinking.
+            try:
+                provider, first_token, rest, _ = await llm.open_stream(
+                    chain, system, messages, feature="chat", session_id=req.session_id,
+                    request_id=request_id,
+                )
+            except llm.LLMError as e:
+                yield f"Error: LLM error — {e}"
+                return
+
+            full_response = first_token
+            if first_token:
+                yield first_token
             async for token in rest:
                 full_response += token
                 yield token
+            completed = True
         except llm.LLMError as e:
-            # Headers are already sent, so report mid-stream failures inline.
             yield f"\n\n[{provider.label} error: {e}]"
-            return
         finally:
-            # Close promptly on client disconnect so the call is traced as cancelled right away.
-            await rest.aclose()
+            if rest is not None:
+                await rest.aclose()
 
-        history.append({"role": "user", "content": req.prompt})
-        history.append({"role": "assistant", "content": full_response})
-        # Keep history bounded
-        if len(history) > 40:
-            session["history"] = history[-40:]
+        if completed:
+            history.append({"role": "user", "content": req.prompt})
+            history.append({"role": "assistant", "content": full_response})
+            # Keep history bounded
+            if len(history) > 40:
+                session["history"] = history[-40:]
 
     return StreamingResponse(
         stream(), media_type="text/plain", headers={"X-LLM-Request-Id": request_id},

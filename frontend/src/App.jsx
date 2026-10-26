@@ -9,7 +9,7 @@ export default function App() {
   const {
     repo, messages, loading, error, usage,
     contextFiles, addContextFile, removeContextFile,
-    load, chat,
+    load, chat, cancelChat,
   } = useSession();
 
   const [repoUrl, setRepoUrl] = useState("");
@@ -107,6 +107,7 @@ export default function App() {
           <ChatPanel
             messages={messages}
             onSend={chat}
+            onCancel={cancelChat}
             contextFiles={contextFiles}
             onRemoveContext={removeContextFile}
             disabled={!repo || isStreaming}

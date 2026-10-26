@@ -51,6 +51,7 @@ function Message({ msg }) {
             animation: "blink 0.8s infinite",
           }} />
         )}
+        {msg.cancelled && <div className="generation-cancelled">Generation cancelled.</div>}
       </div>
     </div>
   );
@@ -65,7 +66,7 @@ const HINTS = [
   "Create a new endpoint for",
 ];
 
-export default function ChatPanel({ messages, onSend, contextFiles, onRemoveContext, disabled }) {
+export default function ChatPanel({ messages, onSend, onCancel, contextFiles, onRemoveContext, disabled }) {
   const [input, setInput] = useState("");
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
@@ -138,12 +139,16 @@ export default function ChatPanel({ messages, onSend, contextFiles, onRemoveCont
             placeholder="Ask about the codebase, request a feature, or describe a bug…"
             disabled={disabled}
           />
-          <button className="send-btn" onClick={send} disabled={disabled}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
+          {messages.some(message => message.streaming) ? (
+            <button className="cancel-btn" onClick={onCancel} type="button">Cancel</button>
+          ) : (
+            <button className="send-btn" onClick={send} disabled={disabled} type="button" aria-label="Send message">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className="input-hints">
           {HINTS.map(h => (

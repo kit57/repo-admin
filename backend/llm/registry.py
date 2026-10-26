@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 
@@ -68,6 +69,7 @@ async def open_stream(
     *,
     feature: str,
     session_id: str | None = None,
+    request_id: str | None = None,
 ):
     """Start streaming from the first provider in the chain that produces a token.
 
@@ -76,7 +78,7 @@ async def open_stream(
     traced under one request id. Returns
     (provider, first_token, rest_of_stream, request_id).
     """
-    request_id = str(uuid.uuid4())
+    request_id = request_id or str(uuid.uuid4())
     errors = []
     for attempt, provider in enumerate(chain):
         stream = traced_stream(
@@ -91,6 +93,9 @@ async def open_stream(
             await stream.aclose()
             errors.append(f"{provider.label}: {e}")
             continue
+        except asyncio.CancelledError:
+            await stream.aclose()
+            raise
         return provider, first, stream, request_id
     raise LLMError(" | ".join(errors))
 

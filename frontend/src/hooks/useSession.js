@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { loadRepo, streamChat, clearSession, getSessionUsage } from "../api/client";
 
 export function useSession() {
@@ -9,6 +9,7 @@ export function useSession() {
   const [error, setError] = useState(null);
   const [contextFiles, setContextFiles] = useState([]);
   const [usage, setUsage] = useState(null);     // UsageStats for this session, from the backend
+  const activeChatRequest = useRef(null);
 
   const load = useCallback(async (url) => {
     setLoading(true);
@@ -31,6 +32,8 @@ export function useSession() {
 
   const chat = useCallback(async (prompt) => {
     if (!repo) return;
+    const controller = new AbortController();
+    activeChatRequest.current = controller;
     setMessages(prev => [...prev, { role: "user", content: prompt }]);
 
     // Append a streaming AI placeholder
@@ -44,19 +47,36 @@ export function useSession() {
           updated[updated.length - 1] = { ...last, content: last.content + token };
           return updated;
         });
-      });
-      // Mark streaming done
+      }, controller.signal);
       setMessages(prev => {
         const updated = [...prev];
-        updated[updated.length - 1] = { ...updated[updated.length - 1], streaming: false };
+        const last = updated[updated.length - 1];
+        updated[updated.length - 1] = { ...last, streaming: false };
         return updated;
       });
     } catch (e) {
-      setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: `Error: ${e.message}` }]);
+      if (controller.signal.aborted) {
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          updated[updated.length - 1] = { ...last, streaming: false, cancelled: true };
+          return updated;
+        });
+      } else {
+        setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: `Error: ${e.message}` }]);
+      }
+    } finally {
+      if (activeChatRequest.current === controller) {
+        activeChatRequest.current = null;
+      }
     }
     // Usage is informational; a failure here shouldn't surface as a chat error.
     getSessionUsage(sessionId).then(setUsage).catch(() => {});
   }, [repo, sessionId, contextFiles]);
+
+  const cancelChat = useCallback(() => {
+    activeChatRequest.current?.abort();
+  }, []);
 
   const addContextFile = useCallback((path) => {
     setContextFiles(prev => prev.includes(path) ? prev : [...prev, path]);
@@ -77,6 +97,6 @@ export function useSession() {
   return {
     sessionId, repo, messages, loading, error, usage,
     contextFiles, addContextFile, removeContextFile,
-    load, chat, reset,
+    load, chat, cancelChat, reset,
   };
 }
