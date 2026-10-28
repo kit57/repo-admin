@@ -6,11 +6,7 @@ export async function loadRepo(url, sessionId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, session_id: sessionId, max_files: 300 }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Failed to load repo");
-  }
-  return res.json();
+  return jsonOrThrow(res, "Failed to load repo");
 }
 
 async function jsonOrThrow(res, fallback) {

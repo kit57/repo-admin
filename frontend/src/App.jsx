@@ -16,13 +16,22 @@ export default function App() {
   const [activeFile, setActiveFile] = useState(null);
   const [view, setView] = useState("repos"); // "repos" | "chat"
   const [openingUrl, setOpeningUrl] = useState(null);
+  const [failedOpenUrl, setFailedOpenUrl] = useState(null);
 
   const openRepo = async (url) => {
     setOpeningUrl(url);
+    setFailedOpenUrl(null);
     setRepoUrl(url);
     setActiveFile(null);
-    if (await load(url)) setView("chat");
-    setOpeningUrl(null);
+    try {
+      if (await load(url)) {
+        setView("chat");
+      } else {
+        setFailedOpenUrl(url);
+      }
+    } finally {
+      setOpeningUrl(null);
+    }
   };
 
   const handleLoad = (e) => {
@@ -65,13 +74,15 @@ export default function App() {
         </form>
 
         <div className="status-badge">
-          {repo ? (
+          {loading ? (
+            <span>Opening repository…</span>
+          ) : error ? (
+            <span style={{ color: "#f87171", fontSize: 11 }}>⚠ {error}</span>
+          ) : repo ? (
             <>
               <div className="dot" />
               indexed · {repo.file_count?.toLocaleString()} files
             </>
-          ) : error ? (
-            <span style={{ color: "#f87171", fontSize: 11 }}>⚠ {error}</span>
           ) : (
             <span style={{ color: "var(--text3)", fontSize: 11 }}>no repo loaded</span>
           )}
@@ -80,7 +91,12 @@ export default function App() {
 
       {/* Main layout */}
       {view === "repos" ? (
-        <RepoList onOpen={openRepo} openingUrl={openingUrl} />
+        <RepoList
+          onOpen={openRepo}
+          openingUrl={openingUrl}
+          openError={failedOpenUrl ? error : null}
+          onRetryOpen={() => failedOpenUrl && openRepo(failedOpenUrl)}
+        />
       ) : (
         <div className="main">
           <FileTree
