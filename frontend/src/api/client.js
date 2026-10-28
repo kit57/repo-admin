@@ -41,7 +41,7 @@ export async function getSessionUsage(sessionId) {
  * Stream a chat response. Calls onToken for each streamed chunk.
  * Returns the full response string.
  */
-export async function streamChat(sessionId, prompt, contextFiles, onToken) {
+export async function streamChat(sessionId, prompt, contextFiles, onToken, signal) {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -50,6 +50,7 @@ export async function streamChat(sessionId, prompt, contextFiles, onToken) {
       prompt,
       context_files: contextFiles,
     }),
+    signal,
   });
 
   if (!res.ok) {

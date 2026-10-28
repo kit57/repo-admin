@@ -114,7 +114,7 @@ npm run dev
 
 3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the LLM prompt, regardless of relevance scoring.
 
-4. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams the selected provider's response back token by token.
+4. **Chat** — Type a request in the chat panel. The backend selects relevant file chunks, builds a system prompt with the repo context, and streams the selected provider's response back token by token. Requests to list or count open issues fetch current issue records from GitHub; pull requests are excluded.
 
 ## LLM Providers
 
