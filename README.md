@@ -114,7 +114,7 @@ npm run dev
 
 3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the LLM prompt, regardless of relevance scoring.
 
-4. **Chat** — Type a request in the chat panel. The backend selects relevant chunks, then lets the model search loaded files or read any file in the tree with `search_code` and `read_file`. Responses stream back token by token.
+4. **Chat** — Type a request in the chat panel. The backend selects relevant chunks, then lets the model search loaded files or read any file in the tree with `search_code` and `read_file`. Requests to list or count open issues fetch current issue records from GitHub; pull requests are excluded. Responses stream back token by token.
 
 The stable system instructions and file tree are reused across turns. Anthropic requests mark that prefix for prompt caching; provider-reported cache read/write token counts appear in the existing LLM usage logs and usage API.
 
@@ -140,8 +140,8 @@ costs nothing per token and needs no API key.
 
 1. Create `backend/llm/<name>_provider.py` with a subclass of `LLMProvider` (`backend/llm/base.py`):
    - set `name` and `default_model`
-   - implement `async def stream(self, system, messages, usage)` — `messages` is a list of
-     `{"role": "user" | "assistant", "content": str}`; yield plain text tokens
+   - implement `async def stream(self, system, messages, usage, tools=None)` — `system` can be
+     text or text blocks, and messages may include tool calls/results; yield text tokens or `ToolCall` events
    - fill in `usage` (`input_tokens` without cached tokens, `output_tokens`, `cache_read_tokens`,
      `cache_write_tokens`) from the provider's response. Fields you leave as `None` are estimated
      from text length and flagged `estimated`

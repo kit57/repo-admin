@@ -1,10 +1,12 @@
-import json
 from collections.abc import AsyncIterator
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before the clients below read their env vars
 
 from dataclasses import asdict
+import json
+import re
+import uuid
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -36,6 +38,17 @@ app.add_middleware(
 
 # In-memory session store: session_id -> parsed repo context
 sessions: dict[str, dict] = {}
+
+
+def _is_open_issue_list_request(prompt: str) -> bool:
+    mentions_issues = re.search(r"\bissues?\b", prompt, re.IGNORECASE)
+    requests_list = re.search(
+        r"\b(open|opened|list|show|fetch|find|display|retrieve|how many|count)\b",
+        prompt,
+        re.IGNORECASE,
+    )
+    return bool(mentions_issues and requests_list)
+
 
 github = GitHubClient()
 parser = RepoParser()
@@ -203,30 +216,66 @@ async def chat(req: ChatRequest):
     system = llm.build_system_prompt(
         session["owner"], session["repo"], session["tree"], session["sent_chunks"],
     )
-    messages = [*history, {"role": "user", "content": req.prompt}]
+    if _is_open_issue_list_request(req.prompt):
+        try:
+            issues = await github.get_open_issues(session["owner"], session["repo"])
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"GitHub API error while fetching open issues: {e}")
 
-    # Errors before the first token become a proper HTTP error the UI can show.
-    try:
-        provider, first_token, rest, request_id = await llm.open_stream(
-            chain, system, messages, feature="chat", session_id=req.session_id,
-            tools=CHAT_TOOLS,
-        )
-    except llm.LLMError as e:
-        raise HTTPException(status_code=502, detail=f"LLM error — {e}")
+        issue_records = [
+            {
+                "number": issue["number"],
+                "title": issue["title"],
+                "url": issue["html_url"],
+                "author": issue.get("user", {}).get("login"),
+                "updated_at": issue.get("updated_at"),
+            }
+            for issue in issues
+        ]
+        system.append({
+            "type": "text",
+            "text": (
+                "## Live GitHub Open Issues\n"
+                "The following records were fetched from GitHub for this repository when this message was received. "
+                "They contain issues only, not pull requests. Use these records for issue counts and links; do not "
+                "invent or supplement issue details.\n"
+                f"Open issue count: {len(issue_records)}\n"
+                f"Issues: {json.dumps(issue_records, ensure_ascii=False)}"
+            ),
+        })
+    messages = [*history, {"role": "user", "content": req.prompt}]
+    request_id = str(uuid.uuid4())
 
     async def stream():
+        provider = None
+        rest = None
         full_response = ""
-        current_provider = provider
-        current_first = first_token
-        current_rest = rest
+        completed = False
         try:
             for _ in range(8):
+                try:
+                    provider, first_event, rest, _ = await llm.open_stream(
+                        chain,
+                        system,
+                        messages,
+                        feature="chat",
+                        session_id=req.session_id,
+                        tools=CHAT_TOOLS,
+                        request_id=request_id,
+                    )
+                except llm.LLMError as e:
+                    if provider is None:
+                        yield f"Error: LLM error — {e}"
+                    else:
+                        yield f"\n\n[{provider.label} error: {e}]"
+                    return
+
                 tool_calls = []
                 round_text = ""
-                if current_first is not None:
-                    events = _with_first(current_first, current_rest)
+                if first_event is not None:
+                    events = _with_first(first_event, rest)
                 else:
-                    events = current_rest
+                    events = rest
                 async for event in events:
                     if isinstance(event, ToolCall):
                         tool_calls.append(event)
@@ -236,11 +285,8 @@ async def chat(req: ChatRequest):
                         yield event
 
                 if not tool_calls:
-                    history.append({"role": "user", "content": req.prompt})
-                    history.append({"role": "assistant", "content": full_response})
-                    if len(history) > 40:
-                        session["history"] = history[-40:]
-                    return
+                    completed = True
+                    break
 
                 messages.append({
                     "role": "assistant",
@@ -265,19 +311,22 @@ async def chat(req: ChatRequest):
                         "content": result,
                     })
 
-                system = llm.build_system_prompt(
-                    session["owner"], session["repo"], session["tree"], session["sent_chunks"],
-                )
-                current_provider, current_first, current_rest, _ = await llm.open_stream(
-                    chain, system, messages, feature="chat", session_id=req.session_id,
-                    tools=CHAT_TOOLS,
-                )
-
-            yield "\n\n[Stopped after too many consecutive tool calls.]"
+            if not completed:
+                yield "\n\n[Stopped after too many consecutive tool calls.]"
         except llm.LLMError as e:
-            yield f"\n\n[{current_provider.label} error: {e}]"
+            if provider is None:
+                yield f"\n\n[LLM error: {e}]"
+            else:
+                yield f"\n\n[{provider.label} error: {e}]"
         finally:
-            await current_rest.aclose()
+            if rest is not None:
+                await rest.aclose()
+
+        if completed:
+            history.append({"role": "user", "content": req.prompt})
+            history.append({"role": "assistant", "content": full_response})
+            if len(history) > 40:
+                session["history"] = history[-40:]
 
     return StreamingResponse(
         stream(), media_type="text/plain", headers={"X-LLM-Request-Id": request_id},

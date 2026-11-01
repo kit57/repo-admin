@@ -6,11 +6,7 @@ export async function loadRepo(url, sessionId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, session_id: sessionId, max_files: 300 }),
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || "Failed to load repo");
-  }
-  return res.json();
+  return jsonOrThrow(res, "Failed to load repo");
 }
 
 async function jsonOrThrow(res, fallback) {
@@ -45,7 +41,7 @@ export async function getSessionUsage(sessionId) {
  * Stream a chat response. Calls onToken for each streamed chunk.
  * Returns the full response string.
  */
-export async function streamChat(sessionId, prompt, contextFiles, onToken) {
+export async function streamChat(sessionId, prompt, contextFiles, onToken, signal) {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -54,6 +50,7 @@ export async function streamChat(sessionId, prompt, contextFiles, onToken) {
       prompt,
       context_files: contextFiles,
     }),
+    signal,
   });
 
   if (!res.ok) {
