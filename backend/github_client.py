@@ -2,6 +2,8 @@ import os
 import re
 import asyncio
 import aiohttp
+import base64
+from urllib.parse import quote
 from models import TreeNode, RepoMeta, RepoSummary
 
 GITHUB_API = "https://api.github.com"
@@ -140,12 +142,32 @@ class GitHubClient:
                     return path, ""
                 data = await resp.json()
                 if data.get("encoding") == "base64":
-                    import base64
                     content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
                     return path, content
         except Exception:
             pass
         return path, ""
+
+    async def get_file(self, owner: str, repo: str, path: str) -> str:
+        """Fetch one repository file by its exact tree path."""
+        encoded_path = quote(path, safe="/")
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{encoded_path}"
+        try:
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(url) as resp:
+                    if resp.status == 404:
+                        raise ValueError(f"GitHub could not find repository file: {path}")
+                    resp.raise_for_status()
+                    data = await resp.json()
+        except aiohttp.ClientError as e:
+            raise RuntimeError(f"GitHub API error retrieving {path}: {e}") from e
+
+        if data.get("encoding") != "base64" or "content" not in data:
+            raise RuntimeError(f"GitHub returned an unsupported file format for {path}")
+        try:
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(f"GitHub returned invalid content for {path}") from e
 
     async def get_files(
         self,

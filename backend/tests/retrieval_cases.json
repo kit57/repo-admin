@@ -1,0 +1,17 @@
+[
+  {
+    "question": "What happens when an external language service rejects a generation?",
+    "answer_files": ["backend/llm/anthropic_provider.py"],
+    "retrieval": "read_file"
+  },
+  {
+    "question": "Where are Anthropic prompt cache token counts recorded?",
+    "answer_files": ["backend/llm/anthropic_provider.py", "backend/llm/tracing.py"],
+    "retrieval": "search_code"
+  },
+  {
+    "question": "Which code fetches repository files from GitHub?",
+    "answer_files": ["backend/github_client.py"],
+    "retrieval": "search_code"
+  }
+]

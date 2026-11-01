@@ -3,7 +3,7 @@ import os
 
 import aiohttp
 
-from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, Usage
+from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, ToolCall, Usage
 
 TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=300)
 OPENAI_URL = "https://api.openai.com/v1"
@@ -27,7 +27,13 @@ class OpenAIProvider(LLMProvider):
         has_auth = bool(os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_BASE_URL"))
         return has_auth and bool(cls.default_model)
 
-    async def stream(self, system: str, messages: list[dict], usage: Usage):
+    async def stream(
+        self,
+        system: str | list[dict],
+        messages: list[dict],
+        usage: Usage,
+        tools: list[dict] | None = None,
+    ):
         if not self.model:
             raise LLMError("OPENAI_MODEL is not set")
         if not self.api_key and self.base_url == OPENAI_URL:
@@ -35,17 +41,21 @@ class OpenAIProvider(LLMProvider):
 
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": system}, *messages],
+            "messages": [{"role": "system", "content": self._system_text(system)}, *messages],
             "stream": True,
             # Ask for a final chunk with token counts; servers that ignore it get estimated usage.
             "stream_options": {"include_usage": True},
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         # OpenAI's current models reject the legacy field; compatible servers often only know it.
         token_field = "max_completion_tokens" if self.base_url == OPENAI_URL else "max_tokens"
         payload[token_field] = self.max_tokens
 
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         url = f"{self.base_url}/chat/completions"
+        tool_calls = {}
         try:
             async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
                 async with session.post(url, json=payload, headers=headers) as resp:
@@ -61,13 +71,40 @@ class OpenAIProvider(LLMProvider):
                             break
                         chunk = json.loads(data)
                         choices = chunk.get("choices") or []
-                        token = choices[0].get("delta", {}).get("content") if choices else None
+                        delta = choices[0].get("delta", {}) if choices else {}
+                        token = delta.get("content")
                         if token:
                             yield token
+                        for item in delta.get("tool_calls") or []:
+                            index = item["index"]
+                            call = tool_calls.setdefault(index, {
+                                "id": "",
+                                "name": "",
+                                "arguments": "",
+                            })
+                            call["id"] += item.get("id") or ""
+                            function = item.get("function") or {}
+                            call["name"] += function.get("name") or ""
+                            call["arguments"] += function.get("arguments") or ""
                         if chunk.get("usage"):
                             self._record_usage(chunk["usage"], usage)
+            for index in sorted(tool_calls):
+                call = tool_calls[index]
+                try:
+                    arguments = json.loads(call["arguments"] or "{}")
+                except json.JSONDecodeError as e:
+                    raise LLMError(f"OpenAI returned invalid arguments for tool {call['name']}") from e
+                if not isinstance(arguments, dict):
+                    raise LLMError(f"OpenAI returned non-object arguments for tool {call['name']}")
+                yield ToolCall(id=call["id"], name=call["name"], arguments=arguments)
         except aiohttp.ClientError as e:
             raise LLMError(f"Can't reach OpenAI-compatible API at {self.base_url}: {e}") from e
+
+    @staticmethod
+    def _system_text(system: str | list[dict]) -> str:
+        if isinstance(system, str):
+            return system
+        return "\n\n".join(block["text"] for block in system)
 
     @staticmethod
     def _record_usage(reported: dict, usage: Usage) -> None:

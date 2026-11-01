@@ -3,7 +3,7 @@ import os
 
 import aiohttp
 
-from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, Usage
+from .base import DEFAULT_MAX_TOKENS, LLMError, LLMProvider, ToolCall, Usage
 
 # Local models can take a while to load into memory before the first token.
 TIMEOUT = aiohttp.ClientTimeout(total=None, sock_connect=10, sock_read=600)
@@ -29,13 +29,24 @@ class OllamaProvider(LLMProvider):
         # Leave room for the reply, the system prompt and chat history.
         return max(self.num_ctx - self.max_tokens - 4_000, 2_000)
 
-    async def stream(self, system: str, messages: list[dict], usage: Usage):
+    async def stream(
+        self,
+        system: str | list[dict],
+        messages: list[dict],
+        usage: Usage,
+        tools: list[dict] | None = None,
+    ):
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": system}, *messages],
+            "messages": [
+                {"role": "system", "content": self._system_text(system)},
+                *self._messages(messages),
+            ],
             "stream": True,
             "options": {"num_ctx": self.num_ctx, "num_predict": self.max_tokens},
         }
+        if tools:
+            payload["tools"] = tools
         if self.num_gpu:
             payload["options"]["num_gpu"] = int(self.num_gpu)
         url = f"{self.base_url}/api/chat"
@@ -60,6 +71,18 @@ class OllamaProvider(LLMProvider):
                             usage.input_tokens = data.get("prompt_eval_count", 0)
                             usage.output_tokens = data.get("eval_count", 0)
                             usage.cache_read_tokens = data.get("prompt_eval_cached_count", 0)
+                            for index, call in enumerate(data.get("message", {}).get("tool_calls") or []):
+                                function = call.get("function") or {}
+                                arguments = function.get("arguments") or {}
+                                if not isinstance(arguments, dict):
+                                    raise LLMError(
+                                        f"Ollama returned invalid arguments for tool {function.get('name', '')}"
+                                    )
+                                yield ToolCall(
+                                    id=f"ollama-{index}",
+                                    name=function.get("name", ""),
+                                    arguments=arguments,
+                                )
                             break
         except aiohttp.ClientConnectorError as e:
             raise LLMError(
@@ -67,6 +90,37 @@ class OllamaProvider(LLMProvider):
             ) from e
         except aiohttp.ClientError as e:
             raise LLMError(f"Ollama request failed: {e}") from e
+
+    @staticmethod
+    def _system_text(system: str | list[dict]) -> str:
+        if isinstance(system, str):
+            return system
+        return "\n\n".join(block["text"] for block in system)
+
+    @staticmethod
+    def _messages(messages: list[dict]) -> list[dict]:
+        converted = []
+        for message in messages:
+            if message.get("tool_calls"):
+                calls = []
+                for call in message["tool_calls"]:
+                    function = call["function"]
+                    calls.append({
+                        "function": {
+                            "name": function["name"],
+                            "arguments": json.loads(function["arguments"]),
+                        },
+                    })
+                converted.append({
+                    "role": "assistant",
+                    "content": message.get("content") or "",
+                    "tool_calls": calls,
+                })
+            elif message["role"] == "tool":
+                converted.append({"role": "tool", "content": message["content"]})
+            else:
+                converted.append(message)
+        return converted
 
     def _http_error(self, status: int, body: str) -> str:
         try:

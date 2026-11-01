@@ -12,12 +12,12 @@ import math
 import os
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from . import otel, pricing
-from .base import LLMError, LLMProvider, Usage
+from .base import LLMError, LLMEvent, LLMProvider, Usage
 
 CHARS_PER_TOKEN = 4  # same rough estimate repo_parser uses
 
@@ -97,14 +97,15 @@ def _estimate_tokens(chars: int) -> int:
 
 async def traced_stream(
     provider: LLMProvider,
-    system: str,
+    system: str | list[dict],
     messages: list[dict],
     *,
     request_id: str,
     attempt: int,
     feature: str,
     session_id: str | None,
-):
+    tools: list[dict] | None = None,
+) -> AsyncIterator[LLMEvent]:
     """Wrap provider.stream, recording tokens, cost, latency and outcome when it finishes."""
     usage = Usage()
     started_at = datetime.now(timezone.utc).isoformat()
@@ -113,11 +114,12 @@ async def traced_stream(
     output_chars = 0
     status, error = "ok", None
     try:
-        async for token in provider.stream(system, messages, usage):
-            if ttft_ms is None:
-                ttft_ms = (time.perf_counter() - start) * 1000
-            output_chars += len(token)
-            yield token
+        async for event in provider.stream(system, messages, usage, tools):
+            if isinstance(event, str):
+                if ttft_ms is None:
+                    ttft_ms = (time.perf_counter() - start) * 1000
+                output_chars += len(event)
+            yield event
     except (GeneratorExit, asyncio.CancelledError):
         status = "cancelled"  # e.g. the client disconnected mid-stream
         raise
@@ -131,7 +133,10 @@ async def traced_stream(
         if usage.input_tokens is not None:
             input_tokens = usage.input_tokens
         elif billed:
-            input_chars = len(system) + sum(len(m["content"]) for m in messages)
+            system_text = system if isinstance(system, str) else "".join(
+                block["text"] for block in system
+            )
+            input_chars = len(system_text) + len(json.dumps(messages, ensure_ascii=False))
             input_tokens = _estimate_tokens(input_chars)
         else:
             input_tokens = 0

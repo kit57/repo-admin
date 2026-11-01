@@ -1,8 +1,9 @@
 import os
 import uuid
+from collections.abc import AsyncIterator
 
 from .anthropic_provider import AnthropicProvider
-from .base import LLMError, LLMProvider
+from .base import LLMError, LLMEvent, LLMProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import OpenAIProvider
 from .tracing import traced_stream
@@ -63,18 +64,19 @@ def provider_chain(name: str | None = None, model: str | None = None) -> list[LL
 
 async def open_stream(
     chain: list[LLMProvider],
-    system: str,
+    system: str | list[dict],
     messages: list[dict],
     *,
     feature: str,
     session_id: str | None = None,
-):
-    """Start streaming from the first provider in the chain that produces a token.
+    tools: list[dict] | None = None,
+) -> tuple[LLMProvider, LLMEvent, AsyncIterator[LLMEvent], str]:
+    """Start streaming from the first provider in the chain that produces an event.
 
     Falling back is only possible before anything has been sent to the client,
-    so each provider is primed with its first token here. Every attempt is
+    so each provider is primed with its first event here. Every attempt is
     traced under one request id. Returns
-    (provider, first_token, rest_of_stream, request_id).
+    (provider, first_event, rest_of_stream, request_id).
     """
     request_id = str(uuid.uuid4())
     errors = []
@@ -82,6 +84,7 @@ async def open_stream(
         stream = traced_stream(
             provider, system, messages,
             request_id=request_id, attempt=attempt, feature=feature, session_id=session_id,
+            tools=tools,
         )
         try:
             first = await anext(stream)

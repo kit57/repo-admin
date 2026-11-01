@@ -110,11 +110,15 @@ npm run dev
 
 1. **Repos** — The Repos view lists every repository your `GITHUB_TOKEN` can see (owned, collaborator and org repos). Click **Sync from GitHub** to refresh it; the list is stored in SQLite so it survives restarts. Repos with no push in 90 days are flagged as stale.
 
-2. **Load** — Click **Open** on a repo, or paste any GitHub URL and click Load. The backend fetches the repo's file tree and contents via the GitHub API, then chunks them into context-ready pieces.
+2. **Load** — Click **Open** on a repo, or paste any GitHub URL and click Load. The backend fetches the full file tree and the first 300 readable files; other files can be fetched on demand during chat.
 
 3. **Pin files** — Click files in the tree sidebar to pin them to the context window. Pinned files are always included in the LLM prompt, regardless of relevance scoring.
 
-4. **Chat** — Type a request in the chat panel. The backend selects the most relevant file chunks (up to ~60k tokens), builds a system prompt with the repo context, and streams the selected provider's response back token by token.
+4. **Chat** — Type a request in the chat panel. The backend selects relevant chunks, then lets the model search loaded files or read any file in the tree with `search_code` and `read_file`. Responses stream back token by token.
+
+The stable system instructions and file tree are reused across turns. Anthropic requests mark that prefix for prompt caching; provider-reported cache read/write token counts appear in the existing LLM usage logs and usage API.
+
+Run the backend retrieval tests from `backend/` with `python -m unittest discover -s tests`. The retrieval cases in `backend/tests/retrieval_cases.json` pair sample questions with their expected answer files.
 
 ## LLM Providers
 
@@ -216,7 +220,7 @@ include discounts, batch rates, or long-context tiers that aren't modeled here).
 ## Key Design Decisions
 
 ### Context selection (`backend/repo_parser.py`)
-Rather than stuffing the entire repo into the prompt (impossible for large repos), the backend scores each file chunk by keyword overlap with the user's prompt, prioritizing explicitly pinned files. The top chunks are greedily packed up to a token budget.
+Rather than stuffing the entire repo into the prompt (impossible for large repos), the backend scores bounded, line-addressable chunks by non-stop-word overlap with the user's prompt and prioritizes pinned files. Files that do not fit are skipped so smaller relevant chunks can still be included. The model also has repository-scoped `read_file` and `search_code` tools for retrieving context that was not selected up front.
 
 ### Streaming
 Responses stream token-by-token from the LLM provider → FastAPI `StreamingResponse` → `fetch` ReadableStream in the browser. The chat bubble updates live as tokens arrive.
@@ -233,6 +237,7 @@ backend/
 ├── models.py          Pydantic schemas
 ├── github_client.py   GitHub API — list repos, fetch tree + file contents
 ├── repo_parser.py     Chunk files, select relevant context
+├── chat_tools.py      Repository-scoped read_file and search_code tools
 ├── llm/               Provider-agnostic LLM layer
 │   ├── base.py                LLMProvider interface + LLMError
 │   ├── registry.py            Provider selection, aliases, fallback

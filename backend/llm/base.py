@@ -1,7 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Shared default for every provider; each one may override it with its own env var.
 DEFAULT_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS") or 8000)
@@ -25,12 +25,21 @@ class Usage:
     cache_write_tokens: int = 0
 
 
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict = field(default_factory=dict)
+
+
+LLMEvent = str | ToolCall
+
+
 class LLMProvider(ABC):
     """Provider-agnostic chat client.
 
-    Every provider takes the same input — a system prompt plus a list of
-    {"role": "user" | "assistant", "content": str} messages — and yields
-    plain text tokens, so callers never need to know which backend is in use.
+    Providers accept normalized messages and tool definitions, and yield text
+    tokens or structured tool calls.
     """
 
     name: str = ""
@@ -54,7 +63,13 @@ class LLMProvider(ABC):
         return 60_000
 
     @abstractmethod
-    def stream(self, system: str, messages: list[dict], usage: Usage) -> AsyncIterator[str]:
+    def stream(
+        self,
+        system: str | list[dict],
+        messages: list[dict],
+        usage: Usage,
+        tools: list[dict] | None = None,
+    ) -> AsyncIterator[LLMEvent]:
         """Yield response tokens and record the provider's token counts in `usage`.
 
         Raise LLMError for user-facing failures. Leave a `usage` field as None when

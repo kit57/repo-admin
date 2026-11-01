@@ -1,3 +1,5 @@
+import json
+from collections.abc import AsyncIterator
 from dotenv import load_dotenv
 
 load_dotenv()  # must run before the clients below read their env vars
@@ -10,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import uvicorn
 
+from chat_tools import CHAT_TOOLS, decode_tool_arguments, read_file
+from llm.base import LLMEvent, ToolCall
 from models import (
     LoadRepoRequest, ChatRequest, LoadRepoResponse, TreeResponse, RepoListResponse, ProvidersResponse,
     LLMCallsResponse, UsageSummaryResponse,
@@ -123,6 +127,8 @@ async def load_repo(req: LoadRepoRequest):
         "chunks": chunks,
         "meta": meta,
         "history": [],
+        "sent_chunks": [],
+        "sent_chunk_keys": set(),
     }
 
     return LoadRepoResponse(
@@ -156,46 +162,122 @@ async def chat(req: ChatRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    tree_paths = {node.path for node in session["tree"] if node.type == "blob"}
+    for path in req.context_files:
+        if path not in tree_paths:
+            raise HTTPException(status_code=400, detail=f"Pinned file is not in this repository: {path}")
+        if path not in session["files"]:
+            try:
+                session["files"][path] = await github.get_file(
+                    session["owner"], session["repo"], path,
+                )
+                session["chunks"].extend(parser.chunk_files({path: session["files"][path]}))
+            except (ValueError, RuntimeError) as e:
+                raise HTTPException(status_code=502, detail=f"Could not load pinned file {path}: {e}")
+
+    provider_context_tokens = min(p.context_tokens for p in chain)
+    stable_prompt = llm.build_system_prompt(
+        session["owner"], session["repo"], session["tree"], [],
+    )
+    stable_chars = sum(len(block["text"]) for block in stable_prompt)
+    sent_chars = sum(len(chunk.content) for chunk in session["sent_chunks"])
+    history_chars = sum(len(message.get("content") or "") for message in session["history"])
+    context_budget = max(
+        provider_context_tokens - (stable_chars + sent_chars + history_chars) // 4,
+        0,
+    )
     relevant_chunks = parser.select_relevant_chunks(
         session["chunks"],
         req.prompt,
         context_files=req.context_files,
-        # A fallback may have a smaller context window than the primary provider.
-        max_tokens=min(p.context_tokens for p in chain),
+        max_tokens=context_budget,
     )
 
+    for chunk in relevant_chunks:
+        key = (chunk.path, chunk.start_line, chunk.end_line)
+        if key not in session["sent_chunk_keys"]:
+            session["sent_chunk_keys"].add(key)
+            session["sent_chunks"].append(chunk)
+
     history = session["history"]
-    system = llm.build_system_prompt(session["owner"], session["repo"], relevant_chunks)
+    system = llm.build_system_prompt(
+        session["owner"], session["repo"], session["tree"], session["sent_chunks"],
+    )
     messages = [*history, {"role": "user", "content": req.prompt}]
 
     # Errors before the first token become a proper HTTP error the UI can show.
     try:
         provider, first_token, rest, request_id = await llm.open_stream(
             chain, system, messages, feature="chat", session_id=req.session_id,
+            tools=CHAT_TOOLS,
         )
     except llm.LLMError as e:
         raise HTTPException(status_code=502, detail=f"LLM error — {e}")
 
     async def stream():
-        full_response = first_token
-        yield first_token
+        full_response = ""
+        current_provider = provider
+        current_first = first_token
+        current_rest = rest
         try:
-            async for token in rest:
-                full_response += token
-                yield token
-        except llm.LLMError as e:
-            # Headers are already sent, so report mid-stream failures inline.
-            yield f"\n\n[{provider.label} error: {e}]"
-            return
-        finally:
-            # Close promptly on client disconnect so the call is traced as cancelled right away.
-            await rest.aclose()
+            for _ in range(8):
+                tool_calls = []
+                round_text = ""
+                if current_first is not None:
+                    events = _with_first(current_first, current_rest)
+                else:
+                    events = current_rest
+                async for event in events:
+                    if isinstance(event, ToolCall):
+                        tool_calls.append(event)
+                    else:
+                        round_text += event
+                        full_response += event
+                        yield event
 
-        history.append({"role": "user", "content": req.prompt})
-        history.append({"role": "assistant", "content": full_response})
-        # Keep history bounded
-        if len(history) > 40:
-            session["history"] = history[-40:]
+                if not tool_calls:
+                    history.append({"role": "user", "content": req.prompt})
+                    history.append({"role": "assistant", "content": full_response})
+                    if len(history) > 40:
+                        session["history"] = history[-40:]
+                    return
+
+                messages.append({
+                    "role": "assistant",
+                    "content": round_text or None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.name,
+                                "arguments": json.dumps(call.arguments),
+                            },
+                        }
+                        for call in tool_calls
+                    ],
+                })
+                for call in tool_calls:
+                    result = await _execute_chat_tool(session, call)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": result,
+                    })
+
+                system = llm.build_system_prompt(
+                    session["owner"], session["repo"], session["tree"], session["sent_chunks"],
+                )
+                current_provider, current_first, current_rest, _ = await llm.open_stream(
+                    chain, system, messages, feature="chat", session_id=req.session_id,
+                    tools=CHAT_TOOLS,
+                )
+
+            yield "\n\n[Stopped after too many consecutive tool calls.]"
+        except llm.LLMError as e:
+            yield f"\n\n[{current_provider.label} error: {e}]"
+        finally:
+            await current_rest.aclose()
 
     return StreamingResponse(
         stream(), media_type="text/plain", headers={"X-LLM-Request-Id": request_id},
@@ -206,6 +288,56 @@ async def chat(req: ChatRequest):
 async def clear_session(session_id: str):
     sessions.pop(session_id, None)
     return {"ok": True}
+
+
+async def _with_first(
+    first: LLMEvent,
+    rest: AsyncIterator[LLMEvent],
+) -> AsyncIterator[LLMEvent]:
+    yield first
+    async for event in rest:
+        yield event
+
+
+async def _execute_chat_tool(session: dict, call: ToolCall) -> str:
+    arguments = decode_tool_arguments(call.arguments)
+    if call.name == "read_file":
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            return "read_file requires a string path from the repository file tree."
+        tree_paths = {
+            node.path for node in session["tree"]
+            if node.type == "blob"
+        }
+        if path not in tree_paths:
+            return f"Path is not a file in this repository: {path}"
+
+        try:
+            content = session["files"].get(path)
+            if content is None:
+                content = await github.get_file(session["owner"], session["repo"], path)
+                session["files"][path] = content
+        except (ValueError, RuntimeError) as e:
+            return f"Could not read {path}: {e}"
+
+        start_line = arguments.get("start_line", 1)
+        end_line = arguments.get("end_line")
+        if not isinstance(start_line, int) or (end_line is not None and not isinstance(end_line, int)):
+            return "start_line and end_line must be integers."
+        return read_file(
+            files={path: content},
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+        )
+
+    if call.name == "search_code":
+        query = arguments.get("query")
+        if not isinstance(query, str):
+            return "search_code requires a string query."
+        return parser.search_code(session["files"], query)
+
+    return f"Unknown tool: {call.name}"
 
 
 if __name__ == "__main__":
