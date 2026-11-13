@@ -74,6 +74,24 @@ npm run dev
 # → App available at http://localhost:5173
 ```
 
+## Contributing
+
+We'd love your help making RepoAI more useful! Contributions of all sizes are welcome,
+including bug reports, feature ideas, documentation improvements, and code.
+
+- **Share an idea or report a bug:** [open an issue](https://github.com/kit57/repo-admin/issues).
+  Please include steps to reproduce bugs and any relevant error messages.
+- **Make a change:** Fork the repository, create a branch, and open a pull request when
+  you're ready. For local setup, follow the [Quick Start](#quick-start).
+- **Check your work:** For backend changes, run the tests from `backend/` with
+  `python -m unittest discover -s tests`. For frontend changes, run `npm run build`
+  from `frontend/`.
+- **Describe your pull request:** Explain what changed and why, and mention the checks
+  you ran. If it addresses an issue, link it in the pull request.
+
+Not sure where to start? Browse the [open issues](https://github.com/kit57/repo-admin/issues)
+or open one to discuss an idea before you begin. Thanks for helping build RepoAI!
+
 ## Environment Variables
 
 ### Backend (`backend/.env`)
