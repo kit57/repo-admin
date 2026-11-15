@@ -74,6 +74,17 @@ npm run dev
 # → App available at http://localhost:5173
 ```
 
+## Running Tests
+
+From `backend/`, install the development dependencies and run the test suite:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
+The GitHub Actions workflow runs the backend tests and frontend production build on
+every push and pull request.
 
 ## Environment Variables
 
