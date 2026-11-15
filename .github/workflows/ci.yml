@@ -23,7 +23,7 @@ jobs:
           python -m pip install -r backend/requirements-dev.txt
       - name: Run backend tests
         working-directory: backend
-        run: pytest
+        run: python -m pytest
 
   frontend:
     runs-on: ubuntu-latest

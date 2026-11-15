@@ -80,7 +80,7 @@ From `backend/`, install the development dependencies and run the test suite:
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-pytest
+python -m pytest
 ```
 
 The GitHub Actions workflow runs the backend tests and frontend production build on
