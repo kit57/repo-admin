@@ -22,9 +22,12 @@ export default function App() {
     setOpeningUrl(url);
     setFailedOpenUrl(null);
     setRepoUrl(url);
-    setActiveFile(null);
     try {
-      if (await load(url)) {
+      const loadedRepo = await load(url);
+      if (loadedRepo) {
+        if (repo?.meta.full_name?.toLowerCase() !== loadedRepo.meta.full_name.toLowerCase()) {
+          setActiveFile(null);
+        }
         setView("chat");
       } else {
         setFailedOpenUrl(url);

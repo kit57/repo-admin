@@ -16,19 +16,22 @@ export function useSession() {
     setError(null);
     try {
       const data = await loadRepo(url, sessionId);
+      if (repo?.meta.full_name?.toLowerCase() !== data.meta.full_name.toLowerCase()) {
+        setContextFiles([]);
+      }
       setRepo(data);
       setMessages([{
         role: "assistant",
         content: `Repo loaded. Indexed **${data.file_count} files** from \`${data.meta.full_name}\`. What would you like to build?`,
       }]);
-      return true;
+      return data;
     } catch (e) {
       setError(e.message);
-      return false;
+      return null;
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [repo, sessionId]);
 
   const chat = useCallback(async (prompt) => {
     if (!repo) return;
