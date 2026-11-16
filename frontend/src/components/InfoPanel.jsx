@@ -91,6 +91,20 @@ export default function InfoPanel({ repo, messages, contextFiles, usage }) {
               </div>
             )}
 
+            {failedFiles.length > 0 && (
+              <>
+                <div className="section-title">Failed files</div>
+                <ul style={{ margin: "0 0 14px", paddingLeft: 16, color: "var(--text2)", fontSize: 11, lineHeight: 1.7 }}>
+                  {failedFiles.map((file) => (
+                    <li key={file.path}>
+                      <div style={{ fontWeight: 600, color: "var(--text1)" }}>{file.path}</div>
+                      <div>{file.category}: {file.reason}</div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
             <StatRow label="Repository" value={meta?.full_name?.split("/")[1]} color="blue" />
             <StatRow label="Files indexed" value={repo.file_count?.toLocaleString()} color="green" />
             <StatRow label="Stars" value={meta?.stars?.toLocaleString()} />
