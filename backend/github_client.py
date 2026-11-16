@@ -5,9 +5,10 @@ import aiohttp
 import base64
 import json
 import time
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
-from models import TreeNode, RepoMeta, RepoSummary
+from models import FileFetchFailure, IndexingSummary, TreeNode, RepoMeta, RepoSummary
 
 GITHUB_API = "https://api.github.com"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=5)
@@ -29,6 +30,29 @@ SKIP_PATHS = {
     "dist", "build", ".next", "vendor", "venv", ".venv",
     "package-lock.json", "yarn.lock", "poetry.lock", "Pipfile.lock",
 }
+
+
+@dataclass
+class FileFetchResult:
+    path: str
+    content: str | None
+    status: str = "fetched"
+    reason: str | None = None
+    category: str | None = None
+
+    def __iter__(self):
+        yield self.path
+        yield self.content
+
+
+class FileIndexResult(dict):
+    def __init__(self, files: dict[str, str], summary: IndexingSummary):
+        super().__init__(files)
+        self.summary = summary
+
+    @property
+    def indexing(self) -> IndexingSummary:
+        return self.summary
 
 
 class GitHubClient:
@@ -247,20 +271,45 @@ class GitHubClient:
         _, ext = os.path.splitext(path)
         return ext.lower() in READABLE_EXTENSIONS
 
-    async def _fetch_file(self, session: aiohttp.ClientSession, owner: str, repo: str, path: str) -> tuple[str, str]:
-        """Fetch a single file's content. Returns (path, content)."""
+    async def _fetch_file(self, session: aiohttp.ClientSession, owner: str, repo: str, path: str) -> FileFetchResult:
+        """Fetch a single file's content and preserve the fetch outcome separately from the payload."""
         url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
         try:
             resp = await self._request(session, "GET", url, allow_error_status=True)
             if resp.status != 200:
-                return path, ""
+                return FileFetchResult(
+                    path=path,
+                    content=None,
+                    status="failed",
+                    reason=f"GitHub returned HTTP {resp.status}",
+                    category="http",
+                )
             data = await resp.json()
+            if not isinstance(data, dict):
+                return FileFetchResult(
+                    path=path,
+                    content=None,
+                    status="failed",
+                    reason="GitHub returned an unexpected payload",
+                    category="response",
+                )
             if data.get("encoding") == "base64":
-                content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-                return path, content
-        except Exception:
-            pass
-        return path, ""
+                content = base64.b64decode(data.get("content", "") or "").decode("utf-8", errors="replace")
+                return FileFetchResult(path=path, content=content, status="fetched")
+            if data.get("type") == "file":
+                return FileFetchResult(path=path, content=data.get("content") or "", status="fetched")
+            return FileFetchResult(path=path, content="", status="fetched")
+        except Exception as exc:
+            category = "network"
+            if isinstance(exc, RuntimeError):
+                category = "github"
+            return FileFetchResult(
+                path=path,
+                content=None,
+                status="failed",
+                reason=str(exc),
+                category=category,
+            )
 
     async def get_file(self, owner: str, repo: str, path: str) -> str:
         """Fetch one repository file by its exact tree path."""
@@ -288,15 +337,28 @@ class GitHubClient:
         repo: str,
         tree: list[TreeNode],
         max_files: int = 300,
-    ) -> dict[str, str]:
-        """Fetch file contents concurrently. Returns {path: content}."""
-        readable = [
+        retry_failed: list[str] | None = None,
+    ) -> FileIndexResult:
+        """Fetch file contents concurrently and keep a summary of skipped and failed files."""
+        all_readable = [
             node.path for node in tree
             if node.type == "blob" and self._is_readable(node.path)
-        ][:max_files]
+        ]
+        if retry_failed:
+            retry_set = set(retry_failed)
+            readable = [path for path in all_readable if path in retry_set]
+            skipped = [path for path in retry_failed if path not in retry_set]
+        else:
+            readable = all_readable[:max_files]
+            skipped = all_readable[max_files:]
+
+        skipped.extend(
+            node.path for node in tree
+            if node.type == "blob" and node.path not in all_readable and not self._is_readable(node.path)
+        )
 
         results = {}
-        # Batch requests to avoid hammering the API
+        failed_files = []
         semaphore = asyncio.Semaphore(10)
 
         async def fetch_with_limit(session, path):
@@ -305,8 +367,22 @@ class GitHubClient:
 
         async with aiohttp.ClientSession(headers=self.headers, timeout=REQUEST_TIMEOUT) as session:
             tasks = [fetch_with_limit(session, path) for path in readable]
-            for path, content in await asyncio.gather(*tasks):
-                if content:
-                    results[path] = content
+            for outcome in await asyncio.gather(*tasks):
+                if outcome.status == "failed":
+                    failed_files.append(FileFetchFailure(
+                        path=outcome.path,
+                        reason=outcome.reason or "Unknown error",
+                        category=outcome.category or "unknown",
+                    ))
+                    continue
+                results[outcome.path] = outcome.content if outcome.content is not None else ""
 
-        return results
+        summary = IndexingSummary(
+            complete=not failed_files and not skipped,
+            fetched=len(results),
+            skipped=len(skipped),
+            failed=len(failed_files),
+            failed_files=failed_files,
+            skipped_files=sorted(set(skipped)),
+        )
+        return FileIndexResult(results, summary)

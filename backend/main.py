@@ -125,7 +125,22 @@ async def load_repo(req: LoadRepoRequest):
 
     try:
         tree = await github.get_tree(owner, repo_name)
-        files = await github.get_files(owner, repo_name, tree, max_files=req.max_files)
+        if req.retry_failed:
+            session_state = sessions.get(req.session_id, {})
+            existing_files = session_state.get("files", {})
+            retry_files = await github.get_files(
+                owner,
+                repo_name,
+                tree,
+                max_files=req.max_files,
+                retry_failed=req.retry_failed,
+            )
+            files = {**existing_files, **retry_files}
+            indexing_summary = retry_files.summary
+        else:
+            files_result = await github.get_files(owner, repo_name, tree, max_files=req.max_files)
+            files = dict(files_result)
+            indexing_summary = files_result.summary
         meta = await github.get_repo_meta(owner, repo_name)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"GitHub API error: {e}")
@@ -147,10 +162,15 @@ async def load_repo(req: LoadRepoRequest):
     return LoadRepoResponse(
         session_id=req.session_id,
         file_count=len(files),
+        complete=indexing_summary.complete,
+        partial=not indexing_summary.complete,
         tree=tree[:200],  # send first 200 tree entries to frontend
         meta=meta,
         provider=default_llm.name,
         model=default_llm.model,
+        indexing=indexing_summary,
+        failed_files=indexing_summary.failed_files,
+        skipped_files=indexing_summary.skipped_files,
     )
 
 

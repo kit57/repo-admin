@@ -1,10 +1,15 @@
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export async function loadRepo(url, sessionId) {
+export async function loadRepo(url, sessionId, retryFailed = []) {
+  const payload = { url, session_id: sessionId, max_files: 300 };
+  if (retryFailed.length) {
+    payload.retry_failed = retryFailed;
+  }
+
   const res = await fetch(`${BASE}/repo/load`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, session_id: sessionId, max_files: 300 }),
+    body: JSON.stringify(payload),
   });
   return jsonOrThrow(res, "Failed to load repo");
 }

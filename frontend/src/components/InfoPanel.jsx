@@ -62,6 +62,7 @@ export default function InfoPanel({ repo, messages, contextFiles, usage }) {
   }, [meta]);
 
   const aiMessages = messages.filter(m => m.role === "assistant").length;
+  const failedFiles = repo?.failed_files || repo?.indexing?.failed_files || [];
 
   return (
     <div className="right-panel">
@@ -75,6 +76,21 @@ export default function InfoPanel({ repo, messages, contextFiles, usage }) {
           </div>
         ) : (
           <>
+            {repo.partial && (
+              <div style={{
+                margin: "8px 0 12px",
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: "rgba(248, 113, 113, 0.12)",
+                border: "1px solid rgba(248, 113, 113, 0.35)",
+                color: "#fca5a5",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}>
+                Partial index: {repo.indexing?.failed ?? failedFiles.length} file fetches failed and {repo.indexing?.skipped ?? repo.skipped_files?.length ?? 0} were skipped.
+              </div>
+            )}
+
             <StatRow label="Repository" value={meta?.full_name?.split("/")[1]} color="blue" />
             <StatRow label="Files indexed" value={repo.file_count?.toLocaleString()} color="green" />
             <StatRow label="Stars" value={meta?.stars?.toLocaleString()} />

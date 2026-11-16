@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import aiohttp
 
-from github_client import GitHubClient, MAX_ATTEMPTS, REQUEST_TIMEOUT
+from github_client import FileFetchResult, GitHubClient, MAX_ATTEMPTS, REQUEST_TIMEOUT
 
 
 class FakeResponse:
@@ -108,6 +108,81 @@ class GitHubRequestTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.session.request.await_count, MAX_ATTEMPTS)
         self.assertEqual([call.args[0] for call in sleep.await_args_list], [1, 2])
+
+    async def test_fetch_file_reports_failed_response_without_treating_empty_content_as_failure(self):
+        class EmptyResponse:
+            status = 200
+
+            async def read(self):
+                return b"{}"
+
+            async def json(self):
+                return {"encoding": "base64", "content": "", "type": "file"}
+
+            def release(self):
+                pass
+
+        async def fake_request(*args, **kwargs):
+            return EmptyResponse()
+
+        session = AsyncMock()
+        session.request.side_effect = fake_request
+
+        result = await self.client._fetch_file(session, "owner", "repo", "empty.txt")
+
+        self.assertEqual(result.status, "fetched")
+        self.assertEqual(result.content, "")
+        self.assertIsNone(result.reason)
+
+    async def test_fetch_file_reports_http_failure_with_details(self):
+        class FailedResponse:
+            status = 500
+            reason = "Internal Server Error"
+
+            async def read(self):
+                return b"{}"
+
+            async def text(self):
+                return "{}"
+
+            def release(self):
+                pass
+
+        async def fake_request(*args, **kwargs):
+            return FailedResponse()
+
+        session = AsyncMock()
+        session.request.side_effect = fake_request
+
+        result = await self.client._fetch_file(session, "owner", "repo", "broken.js")
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.category, "http")
+        self.assertIn("500", result.reason)
+
+    async def test_get_files_can_retry_only_failed_paths(self):
+        tree = [
+            type("Node", (), {"path": "ok.py", "type": "blob"})(),
+            type("Node", (), {"path": "bad.py", "type": "blob"})(),
+            type("Node", (), {"path": "empty.md", "type": "blob"})(),
+        ]
+
+        async def fake_fetch_file(session, owner, repo, path):
+            if path == "ok.py":
+                return FileFetchResult(path=path, content="print('ok')", status="fetched")
+            if path == "bad.py":
+                return FileFetchResult(path=path, content=None, status="failed", reason="GitHub returned HTTP 500", category="http")
+            if path == "empty.md":
+                return FileFetchResult(path=path, content="", status="fetched")
+            return FileFetchResult(path=path, content="", status="fetched")
+
+        with patch.object(self.client, "_fetch_file", new=fake_fetch_file):
+            result = await self.client.get_files("owner", "repo", tree, retry_failed=["bad.py"])
+
+        self.assertEqual(list(result.keys()), [])
+        self.assertEqual(result.indexing.failed, 1)
+        self.assertEqual(result.indexing.failed_files[0].path, "bad.py")
+        self.assertEqual(result.indexing.complete, False)
 
     def test_requests_have_explicit_connect_and_total_timeouts(self):
         self.assertEqual(REQUEST_TIMEOUT.connect, 5)

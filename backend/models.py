@@ -1,12 +1,28 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 import uuid
+
+
+class FileFetchFailure(BaseModel):
+    path: str
+    reason: str
+    category: str = "unknown"
+
+
+class IndexingSummary(BaseModel):
+    complete: bool = True
+    fetched: int = 0
+    skipped: int = 0
+    failed: int = 0
+    failed_files: list[FileFetchFailure] = Field(default_factory=list)
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 class LoadRepoRequest(BaseModel):
     url: str
     session_id: str = ""
     max_files: int = 300
+    retry_failed: list[str] = Field(default_factory=list)
 
     @field_validator("session_id", mode="before")
     @classmethod
@@ -50,10 +66,15 @@ class RepoMeta(BaseModel):
 class LoadRepoResponse(BaseModel):
     session_id: str
     file_count: int
+    complete: bool = True
+    partial: bool = False
     tree: list[TreeNode]
     meta: RepoMeta
     provider: str
     model: str
+    indexing: IndexingSummary = Field(default_factory=IndexingSummary)
+    failed_files: list[FileFetchFailure] = Field(default_factory=list)
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 class ProviderInfo(BaseModel):

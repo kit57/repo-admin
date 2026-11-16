@@ -18,12 +18,12 @@ export default function App() {
   const [openingUrl, setOpeningUrl] = useState(null);
   const [failedOpenUrl, setFailedOpenUrl] = useState(null);
 
-  const openRepo = async (url) => {
+  const openRepo = async (url, retryFailed = []) => {
     setOpeningUrl(url);
     setFailedOpenUrl(null);
     setRepoUrl(url);
     try {
-      const loadedRepo = await load(url);
+      const loadedRepo = await load(url, retryFailed);
       if (loadedRepo) {
         if (repo?.meta.full_name?.toLowerCase() !== loadedRepo.meta.full_name.toLowerCase()) {
           setActiveFile(null);
@@ -35,6 +35,11 @@ export default function App() {
     } finally {
       setOpeningUrl(null);
     }
+  };
+
+  const retryFailedFiles = () => {
+    if (!repoUrl || !repo?.indexing?.failed_files?.length) return;
+    openRepo(repoUrl, repo.indexing.failed_files.map(file => file.path));
   };
 
   const handleLoad = (e) => {
@@ -84,7 +89,12 @@ export default function App() {
           ) : repo ? (
             <>
               <div className="dot" />
-              indexed · {repo.file_count?.toLocaleString()} files
+              {repo.partial ? "partial index" : "indexed"} · {repo.file_count?.toLocaleString()} files
+              {repo.partial && repo.indexing?.failed_files?.length > 0 && (
+                <button type="button" onClick={retryFailedFiles} style={{ marginLeft: 8 }} className="load-btn small">
+                  Retry failed
+                </button>
+              )}
             </>
           ) : (
             <span style={{ color: "var(--text3)", fontSize: 11 }}>no repo loaded</span>

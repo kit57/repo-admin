@@ -11,19 +11,20 @@ export function useSession() {
   const [usage, setUsage] = useState(null);     // UsageStats for this session, from the backend
   const activeChatRequest = useRef(null);
 
-  const load = useCallback(async (url) => {
+  const load = useCallback(async (url, retryFailed = []) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await loadRepo(url, sessionId);
+      const data = await loadRepo(url, sessionId, retryFailed);
       if (repo?.meta.full_name?.toLowerCase() !== data.meta.full_name.toLowerCase()) {
         setContextFiles([]);
       }
       setRepo(data);
-      setMessages([{
-        role: "assistant",
-        content: `Repo loaded. Indexed **${data.file_count} files** from \`${data.meta.full_name}\`. What would you like to build?`,
-      }]);
+      const failedFiles = data.indexing?.failed_files || data.failed_files || [];
+      const partialMessage = data.partial
+        ? `Partial index: ${data.file_count} files indexed, ${data.indexing?.failed ?? failedFiles.length} failed, ${data.indexing?.skipped ?? data.skipped_files?.length ?? 0} skipped. Retry the failed files to finish loading the repo.`
+        : `Repo loaded. Indexed **${data.file_count} files** from \`${data.meta.full_name}\`. What would you like to build?`;
+      setMessages([{ role: "assistant", content: partialMessage }]);
       return data;
     } catch (e) {
       setError(e.message);
